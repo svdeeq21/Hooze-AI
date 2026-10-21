@@ -1,0 +1,26 @@
+# UNTESTED (no Docker in the authoring environment). Adds hooze-core to the SAME compose project as Evolution API, so the whole
+# stack starts with one command. Usage from ~/hooze-stack (adjust paths/names to your actual compose file):
+#
+#   docker compose -f docker-compose.yml -f /path/to/hooze-core/deploy/docker-compose.hooze-core.yml up -d --build
+#
+# Inside the compose network, services reach each other by SERVICE NAME, not localhost / host.docker.internal:
+#   * Evolution -> hooze-core webhook :  http://hooze-core:8000/v1/webhooks/whatsapp/<channel_id>      (header x-hooze-secret: <secret>)
+#   * hooze-core -> Evolution          :  base_url = http://<your-evolution-service-name>:8080        (the channel row's config.base_url)
+# PUBLIC_BASE_URL only affects the webhook URL the admin API *prints*; set it to http://hooze-core:8000 while Evolution is in the same stack.
+# One worker only until UPSTASH_* is configured (see .env.example).
+services:
+  hooze-core:
+    build:
+      context: ${HOOZE_CORE_DIR:-../hooze-core}
+    env_file: ${HOOZE_CORE_DIR:-../hooze-core}/.env
+    environment:
+      PUBLIC_BASE_URL: http://hooze-core:8000
+      PORT: "8000"
+    ports:
+      - "8000:8000"        # keep for curl/Manager from the host; remove once everything talks over the compose network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

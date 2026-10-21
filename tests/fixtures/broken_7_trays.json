@@ -1,0 +1,15 @@
+{
+  "identity": {"name": "7 Trays", "industry": "Restaurant and food services", "description": "A small restaurant serving food to customers.", "website": "", "address": "", "languages": ["English"], "timezone": "Africa/Lagos", "currency": "NGN",
+    "facts": {"products": ["Food"], "menu": [], "prices": [], "delivery_available": null, "pickup_available": null, "dine_in_available": null, "payment_methods": []}},
+  "offerings": [{"name": "Food", "description": "Food offerings from 7 Trays.", "price": null}],
+  "faqs": [{"question": "Can I see the menu?", "answer": "Please ask our team."}],
+  "qualification_slots": ["customer_name", "customer_intent", "food_interest", "quantity", "service_type", "customer_location", "booking_date", "booking_time", "guest_count", "special_requests"],
+  "stuck_after_user_messages": 14,
+  "sales_process": {"goal": "consult_and_book", "notes": "x"},
+  "booking": {"enabled": true, "subject_label": "reservation request"},
+  "hours": {"default": ["09:00", "18:00"]},
+  "handoff": {"contact_name": "", "staff_phones": [], "human_request_patterns": ["speak to a human"]},
+  "communication": {"tone": "warm", "greeting": "Hi", "rules": ["Ask one question."]},
+  "restrictions": {"never_say": ["x"], "prohibited_claims": ["y"]},
+  "integrations": {"payments": null, "payments_connected": false, "channel_connected": false}
+}
