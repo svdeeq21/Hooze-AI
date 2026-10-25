@@ -167,3 +167,20 @@ async def create_instance(base_url: str, api_key: str, instance_name: str, http_
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Evolution create {r.status_code}: {r.text[:200]}")
     return r.json() if r.content else {}
+
+
+async def delete_instance(base_url: str, api_key: str, instance_name: str, http_factory=None) -> str:
+    """Log the WhatsApp session out and delete the instance from the Evolution server. "gone" if it did not exist (already removed)."""
+    make = http_factory or (lambda timeout=20.0: httpx.AsyncClient(timeout=timeout))
+    base, headers = base_url.rstrip("/"), {"apikey": api_key}
+    async with make(20.0) as c:
+        try:
+            await c.delete(f"{base}/instance/logout/{instance_name}", headers=headers)       # best effort: it may not be connected
+        except Exception:
+            pass
+        r = await c.delete(f"{base}/instance/delete/{instance_name}", headers=headers)
+    if r.status_code == 404:
+        return "gone"
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Evolution delete {r.status_code}: {r.text[:200]}")
+    return "deleted"

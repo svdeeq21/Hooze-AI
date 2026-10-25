@@ -1,5 +1,20 @@
 # Session 4 — bug-fix round (what changed, what to run, what is still open)
 
+## ROUND 2 (read this first)
+**Embeddings were failing because Google shut down `gemini-embedding-2-preview` on 10 Aug 2026.** Chat kept working (Groq fallback);
+only knowledge/FAQ lookup died. The code now defaults to `EMBEDDING_MODEL=gemini-embedding-2` and supports both model families
+(`-2` takes the task as text, `-001` takes `task_type`). Vectors from different models cannot be compared, so after deploying:
+1. Set nothing (the new default applies) or set `EMBEDDING_MODEL=gemini-embedding-2` explicitly. Keep `EMBEDDING_DIMS=768`.
+2. Deploy, then run `POST /v1/platform/embeddings/reindex` (or Settings -> Rebuild search index per client).
+3. `python scripts/llm_check.py` now reports "EMBEDDINGS ARE FAILING" instead of hiding it.
+
+Also new in round 2: one chat per customer across a client's numbers (`merge` tool for old split chats), checkout re-prices from the live
+menu and asks the customer to confirm if a price changed, per-customer export/erase + optional message retention
+(`MESSAGE_RETENTION_DAYS`), deleting a client also removes its Evolution instances, and Settings-tab controls for all of it.
+Draft privacy notice: `docs/PRIVACY_NOTICE_DRAFT.md` (for a lawyer to review).
+
+## ROUND 1
+
 ## Deploy order (IMPORTANT)
 1. Run `migrations/0006_api_key_roles.sql` (adds `api_keys.role`). The new code writes that column, so run it BEFORE deploying.
 2. Deploy the code.
@@ -28,11 +43,8 @@
 | 20 | Demo server serves its uploads at `/demo-media/...` | `scripts/demo_server.py` |
 
 ## Still open
-- **12** `no embedding provider available`: check `GEMINI_API_KEY` on the live server (run the llm check script). Not a code change.
-- **18** A customer who messages two of a client's numbers gets two chats: decision needed.
-- **22** Per-customer erasure / retention rule / privacy notice (the delete-client endpoint covers a whole client only).
-- Cart prices are not re-priced if the menu price changes while a cart is open; an open cart's "in progress" draft can still name a removed product.
-- Deleting a client does not delete its Evolution instance.
-- Supabase Storage list/delete requests are tested against a mock, not the live service: run the cleanup dry run on a real client first.
-- Dashboard UI has no controls yet for key roles, cleanup dry run or delete-client.
-- `_seed_catalog` treats the config as the source of truth for the menu. When a CSV/sheet import manages `products` directly, it must not also be pruned by this sync.
+- **Provider outage drill:** Gemini is the only embedding provider. If it fails, chat works but knowledge lookup is down (`KNOWLEDGE_LOOKUP_FAILED` alert fires). A second embedding provider would need its own vector column; not built.
+- **Privacy:** the legal parts (retention period, notice wording, processor agreements, registration) need a lawyer; the code only does what you decide. Logs/events are not scrubbed of anything beyond what is already masked.
+- **Retention** deletes messages and the summaries built from them; orders/payments are never touched.
+- Supabase Storage list/delete requests and Evolution delete are tested against mocks, not the live services: run the cleanup dry run on a real client first.
+- Old split chats stay split until you run Settings -> Check for duplicates -> Join (or `POST /v1/platform/tenants/{id}/conversations/merge`).

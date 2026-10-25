@@ -13,6 +13,12 @@ from tests.test_operator_api import P
 OLD = "2000-01-01T00:00:00+00:00"
 
 
+@pytest.fixture(autouse=True)
+def no_real_evolution(monkeypatch):
+    async def ok(*a, **k): return "deleted"                 # deleting a client also deletes its Evolution instances: never touch a real server in tests
+    monkeypatch.setattr("hooze.api.operator.delete_evolution_instance", ok)
+
+
 def url(storage, path): return storage.public_url(path)
 
 
@@ -168,3 +174,25 @@ async def test_a_non_platform_key_cannot_delete_a_client_or_run_cleanup(food_wor
     async with client(c_) as c:
         assert (await c.delete(f"/v1/platform/tenants/{w.tid}?confirm=x", headers=k)).status_code == 403
         assert (await c.post(f"/v1/platform/tenants/{w.tid}/media/cleanup", headers=k)).status_code == 403
+
+
+async def test_deleting_a_client_also_removes_its_evolution_instances_and_reports_ones_it_could_not(food_world, monkeypatch):
+    w, st = await world_with_menu_photos(food_world)
+    ch2 = (await w.pdb.table("channels").insert({"tenant_id": w.tid, "kind": "whatsapp_evolution", "instance_name": "second-number", "config": {"base_url": "http://evo.test"},
+                                                 "secret_hash": "0" * 64, "status": "active"}).execute()).data[0]
+    seen = []
+    async def fake_delete(base_url, api_key, name, http_factory=None):
+        seen.append(name)
+        if name == "second-number":
+            raise RuntimeError("Evolution unreachable")
+        return "deleted"
+    monkeypatch.setattr("hooze.api.operator.delete_evolution_instance", fake_delete)
+    slug = next(t for t in w.db.rows("tenants") if t["id"] == w.tid)["slug"]
+    c_ = container(w); c_.media = st
+    async with client(c_) as c:
+        await c.patch(f"/v1/platform/tenants/{w.tid}", json={"status": "suspended"}, headers=P)
+        r = await c.delete(f"/v1/platform/tenants/{w.tid}?confirm={slug}", headers=P)
+    body = r.json()
+    assert r.status_code == 200 and sorted(seen) == sorted([w.channel["instance_name"], "second-number"])
+    assert body["instances_deleted"] == 1 and body["instances_to_remove_by_hand"][0]["instance"] == "second-number"      # reported, not blocking
+    assert not any(t["id"] == w.tid for t in w.db.rows("tenants"))

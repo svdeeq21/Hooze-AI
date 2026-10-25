@@ -46,12 +46,16 @@ async def check_channels(pdb, adapters, events, down: dict, now: float = 0.0, re
     return out
 
 
+from hooze.privacy import apply_retention
+
+
 class Maintenance:
     def __init__(self, inbox, pdb, adapters, events, settings, clock):
         self.inbox, self.pdb, self.adapters, self.events, self.s, self.clock = inbox, pdb, adapters, events, settings, clock
         self._down: dict = {}
         self._last_channel_check: Optional[float] = None
         self._last_purge: Optional[float] = None
+        self._last_retention: Optional[float] = None
         self.startup_delay = 3.0
 
     async def run_once(self) -> dict:
@@ -75,6 +79,14 @@ class Maintenance:
                 out["purged"] = await self.inbox.purge()
             except Exception as e:
                 await self.events.error("MAINTENANCE_STEP_FAILED", step="purge", error=describe_exc(e))
+        if self.s.message_retention_days > 0 and (self._last_retention is None or now - self._last_retention >= 3600):
+            self._last_retention = now
+            try:
+                out["retention"] = await apply_retention(self.pdb, self.s.message_retention_days, self.clock())
+                if out["retention"]["messages"]:
+                    await self.events.info("RETENTION_APPLIED", **out["retention"])
+            except Exception as e:
+                await self.events.error("MAINTENANCE_STEP_FAILED", step="retention", error=describe_exc(e))
         return out
 
     async def loop(self) -> None:

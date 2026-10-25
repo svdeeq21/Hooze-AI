@@ -45,3 +45,19 @@ async def test_the_recommendation_orders_healthy_providers_fastest_first_and_nam
 async def test_with_nothing_healthy_it_says_so_instead_of_recommending():
     down = await lc.check_provider(P("gemini", "g", err=RuntimeError("503")))
     assert "No provider passed" in lc.recommend([down]) and "LLM_PROVIDER_ORDER" not in lc.recommend([down])
+
+
+class BrokenEmbeds(P):
+    async def embed(self, text, dims, kind="query"): raise RuntimeError("404 NOT_FOUND: embedding model retired")
+
+
+async def test_a_provider_whose_embeddings_fail_is_still_healthy_for_chat_but_the_problem_is_called_out():
+    rep = await lc.check_provider(BrokenEmbeds("gemini", "gemini-3.8-flash"))
+    assert rep.healthy and "NOT_FOUND" in rep.embedding_problem                                  # chat works, lookups do not
+    text = lc.recommend([rep])
+    assert "EMBEDDINGS ARE FAILING" in text and "EMBEDDING_MODEL=gemini-embedding-2" in text and "embeddings/reindex" in text
+
+
+async def test_a_provider_that_simply_has_no_embeddings_is_not_flagged():
+    rep = await lc.check_provider(P("groq", "m", embeds=False))
+    assert rep.embedding_problem is None and "EMBEDDINGS" not in lc.recommend([rep])

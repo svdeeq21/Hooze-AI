@@ -47,7 +47,13 @@ export interface Contact { id: string; phone: string; display_name: string | nul
 export interface Tenant { id: string; slug: string; name: string; status: "onboarding" | "active" | "suspended"; created_at: string }
 export interface TenantRow extends Tenant { channels: number; active_version: number | null; conversations: number; handoff: number }
 export interface Channel { id: string; kind: string; instance_name: string; status: string; base_url: string | null; connection: string; webhook_url: string }
-export interface ApiKeyRow { id: string; label: string; revoked_at: string | null; created_at: string }
+export type KeyRole = "admin" | "staff" | "viewer";
+export interface ApiKeyRow { id: string; label: string; role?: KeyRole; revoked_at: string | null; created_at: string }
+export interface MediaCleanup { dry_run: boolean; listed: number; in_use: number; too_new: number; deleted: number; would_delete: string[]; skipped: string }
+export interface MergeReport { dry_run: boolean; customers_with_duplicates: number; conversations_removed: number }
+export interface ErasePreview { dry_run: boolean; messages: number; conversations: number; bookings: number; queued_webhooks: number; orders_kept_but_scrubbed: number }
+export interface DeleteResult { deleted: boolean; files_deleted: number; instances_deleted: number; instances_to_remove_by_hand: { instance: string; error: string }[] }
+export interface ReindexResult { model: string; tenants: Record<string, { status: string; documents?: number; updated?: number; unchanged?: number; failed?: number; error?: string }> }
 export interface Integration { id: string; kind: string; status: string; payment_webhook_url: string; created_at: string }
 export interface Issue { code: string; message: string; field: string }
 export interface Report { ok: boolean; completeness: number; blocking: Issue[]; warnings: Issue[] }
@@ -110,7 +116,13 @@ export const api = {
   tenant: (id: string) => get<TenantDetail>(PT(id)),
   createTenant: (slug: string, name: string) => post<{ tenant: Tenant; api_key: string }>("/v1/platform/tenants", { slug, name }),
   patchTenant: (id: string, b: { status?: "active" | "suspended"; name?: string }) => patch<{ tenant: Tenant }>(PT(id), b),
-  createKey: (id: string, label: string) => post<{ id: string; api_key: string }>(`${PT(id)}/api-keys`, { label }),
+  createKey: (id: string, label: string, role: KeyRole = "staff") => post<{ id: string; api_key: string; role: KeyRole }>(`${PT(id)}/api-keys`, { label, role }),
+  cleanupMedia: (id: string, dry_run: boolean) => post<MediaCleanup>(`${PT(id)}/media/cleanup?dry_run=${dry_run}`),
+  mergeChats: (id: string, dry_run: boolean) => post<MergeReport>(`${PT(id)}/conversations/merge?dry_run=${dry_run}`),
+  reindex: (id: string) => post<ReindexResult>(`/v1/platform/embeddings/reindex?tenant_id=${id}`),
+  deleteClient: (id: string, slug: string) => del<DeleteResult>(`${PT(id)}?confirm=${encodeURIComponent(slug)}`),
+  exportCustomer: (id: string, phone: string) => get<Record<string, unknown>>(`${T(id)}/customers/${encodeURIComponent(phone)}/export`),
+  eraseCustomer: (id: string, phone: string, dry_run: boolean) => del<ErasePreview>(`${T(id)}/customers/${encodeURIComponent(phone)}?dry_run=${dry_run}`),
   revokeKey: (id: string, kid: string) => del(`${PT(id)}/api-keys/${kid}`),
   provision: (id: string, b: { instance_name: string; base_url: string; api_key: string; create_instance: boolean; webhook_base_url?: string }) =>
     post<{ channel: Channel; webhook_url: string; webhook_configured: boolean; note: string | null }>(`${PT(id)}/channels/provision`, b),

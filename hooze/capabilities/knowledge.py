@@ -44,19 +44,19 @@ class KnowledgeDoc:
     media: list = field(default_factory=list)        # [{"type": "image"|"video", "url": "..."}]
     is_active: bool = True
 
-    def content_hash(self) -> str:
+    def content_hash(self, recipe: str = "") -> str:
         # EMBED_RECIPE is part of the hash on purpose: changing how documents are embedded makes every stored vector stale, and a hash that
         # ignored it would skip them as "unchanged" forever. Bump it and the next activation re-embeds everything once.
-        return hashlib.sha256(json.dumps([EMBED_RECIPE, self.title, self.content, self.kind, self.data, self.media, self.is_active], sort_keys=True, default=str).encode()).hexdigest()
+        return hashlib.sha256(json.dumps([EMBED_RECIPE, recipe, self.title, self.content, self.kind, self.data, self.media, self.is_active], sort_keys=True, default=str).encode()).hexdigest()
 
 
-async def sync_documents(db, embedder, docs: list[KnowledgeDoc], *, source: str, concurrency: int = 4) -> dict:
+async def sync_documents(db, embedder, docs: list[KnowledgeDoc], *, source: str, concurrency: int = 4, recipe: str = "") -> dict:
     """Idempotent hash-diff sync. Only new/changed docs are embedded; docs missing from the feed are deactivated."""
     existing = {r["external_id"]: r for r in ((await db.table("knowledge_items").select("*").eq("source", source).execute()).data or [])}
     sem, stats = asyncio.Semaphore(concurrency), {"created": 0, "updated": 0, "unchanged": 0, "deactivated": 0, "failed": 0}
 
     async def one(d: KnowledgeDoc):
-        h, row = d.content_hash(), existing.get(d.external_id)
+        h, row = d.content_hash(recipe), existing.get(d.external_id)
         if row and row.get("content_hash") == h:
             stats["unchanged"] += 1
             return

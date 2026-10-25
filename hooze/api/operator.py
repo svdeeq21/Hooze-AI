@@ -15,12 +15,15 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
+from hooze.config_engine.activation import reindex_knowledge
 from hooze.api.deps import get_container, require_platform, require_tenant, require_tenant_admin
-from hooze.channels.evolution import create_instance as create_evolution_instance
+from hooze.channels.evolution import create_instance as create_evolution_instance, delete_instance as delete_evolution_instance
 from hooze.kernel.db import first
 from hooze.media.cleanup import purge_tenant, sweep_tenant
 from hooze.media.processing import MediaError, process as process_media
 from hooze.media.storage import MediaStorageError
+from hooze.privacy import erase_customer, export_customer
+from hooze.runtime.merge import merge_tenant_conversations
 from hooze.runtime.scheduler import run_tick
 from hooze.runtime.store import ConversationStore
 from hooze.runtime.tenant_runtime import build_tenant_runtime
@@ -152,6 +155,33 @@ async def patch_tenant(tenant_id: str, body: TenantPatch, request: Request):
     return {"tenant": row}
 
 
+@router.post("/v1/platform/embeddings/reindex", dependencies=[Depends(require_platform)])
+async def reindex_embeddings(request: Request, tenant_id: Optional[str] = None):
+    """Re-embed knowledge (FAQs, listings, menu facts) with the CURRENT embedding model, for one client or for all of them.
+    Run this once after changing EMBEDDING_MODEL (or when Google retires a model): vectors from different models cannot be compared, so
+    until it has run, lookups match the wrong things or nothing. Safe to repeat: documents already up to date are skipped."""
+    c = get_container(request)
+    ids = [tenant_id] if tenant_id else [t["id"] for t in (await c.pdb.table("tenants").select("id").execute()).data or []]
+    out = {}
+    for tid in ids:
+        try:
+            out[tid] = await reindex_knowledge(c.pdb, c.llm, tid)
+        except Exception as e:
+            out[tid] = {"status": "error", "error": str(e)[:200]}
+    await c.events.info("EMBEDDINGS_REINDEXED", tenants=len(ids), failed=sum(1 for r in out.values() if r["status"] in ("failed", "error")))
+    return {"model": c.llm.embedding_recipe() if hasattr(c.llm, "embedding_recipe") else "", "tenants": out}
+
+
+@router.post("/v1/platform/tenants/{tenant_id}/conversations/merge", dependencies=[Depends(require_platform)])
+async def merge_conversations(tenant_id: str, request: Request, dry_run: bool = True):
+    """Join customers' duplicate conversations (one per number, from before chats became one-per-customer). Dry run by default."""
+    c = get_container(request)
+    await _tenant_or_404(c, tenant_id)
+    r = await merge_tenant_conversations(c.pdb.for_tenant(tenant_id), dry_run=dry_run)
+    await c.events.info("CONVERSATIONS_MERGED", tenant_id=tenant_id, dry_run=dry_run, customers=r["customers_with_duplicates"], removed=r["conversations_removed"])
+    return r
+
+
 @router.post("/v1/platform/tenants/{tenant_id}/media/cleanup", dependencies=[Depends(require_platform)])
 async def cleanup_media(tenant_id: str, request: Request, dry_run: bool = True):
     """Delete uploaded files no live menu item uses (older than the age gate). Defaults to a DRY RUN that only lists what would go."""
@@ -184,10 +214,21 @@ async def delete_tenant(tenant_id: str, request: Request, confirm: str = ""):
         except MediaStorageError as e:
             await c.events.error("TENANT_DELETE_FILES_FAILED", tenant_id=tenant_id, error=str(e)[:200])
             raise HTTPException(502, "Couldn't delete this client's files from storage, so nothing was deleted. Try again.")
+    # The client's WhatsApp numbers: remove each instance from the Evolution server so it is not left running (and billed) with nobody using it.
+    # A dead/unreachable Evolution server must not make deletion impossible, so failures are REPORTED (to remove by hand) rather than blocking.
+    instances, failed = 0, []
+    for ch in (await c.pdb.table("channels").select("*").eq("tenant_id", tenant_id).execute()).data or []:
+        try:
+            key = c.vault.decrypt(ch["credentials_enc"]) if ch.get("credentials_enc") else ""
+            await delete_evolution_instance((ch.get("config") or {}).get("base_url", ""), key, ch["instance_name"])
+            instances += 1
+        except Exception as e:
+            failed.append({"instance": ch.get("instance_name"), "error": str(e)[:160]})
     await c.pdb.table("tenants").delete().eq("id", tenant_id).execute()
     c.configs.invalidate(tenant_id)
-    await c.events.warn("TENANT_DELETED", slug=t["slug"], name=t["name"], deleted_tenant_id=tenant_id, files_deleted=files)   # no tenant_id: the row is gone
-    return {"deleted": True, "slug": t["slug"], "files_deleted": files}
+    await c.events.warn("TENANT_DELETED", slug=t["slug"], name=t["name"], deleted_tenant_id=tenant_id, files_deleted=files,
+                        instances_deleted=instances, instances_failed=failed)                    # no tenant_id: the row is gone
+    return {"deleted": True, "slug": t["slug"], "files_deleted": files, "instances_deleted": instances, "instances_to_remove_by_hand": failed}
 
 
 class KeyIn(BaseModel):
@@ -428,6 +469,31 @@ async def reset_nudges(tenant_id: str, request: Request):
     rows = (await db.table("nudge_state").update({"status": "ACTIVE", "step": 0, "last_nudge_at": None, "next_nudge_at": None})
             .in_("status", ["ACTIVE", "IDLE", "EXHAUSTED"]).execute()).data or []
     return {"reset": len(rows)}
+
+
+# ═══════════════════════ customer privacy ═══════════════════════
+@router.get("/v1/tenants/{tenant_id}/customers/{phone}/export", dependencies=[Depends(require_tenant_admin)])
+async def export_customer_data(tenant_id: str, phone: str, request: Request):
+    """Everything held about one customer (a data-access request). Admin or platform key only."""
+    c = get_container(request)
+    data = await export_customer(c.pdb.for_tenant(tenant_id), phone)
+    if data is None:
+        raise HTTPException(404, "No customer with that phone number.")
+    await c.events.info("CUSTOMER_DATA_EXPORTED", tenant_id=tenant_id)
+    return data
+
+
+@router.delete("/v1/tenants/{tenant_id}/customers/{phone}", dependencies=[Depends(require_tenant_admin)])
+async def erase_customer_data(tenant_id: str, phone: str, request: Request, dry_run: bool = True):
+    """Erase one customer's personal data (a deletion request). Dry run by default. Orders and payments are KEPT as the business's records,
+    with the person's details removed from them. Cannot be undone."""
+    c = get_container(request)
+    r = await erase_customer(c.pdb.for_tenant(tenant_id), phone, dry_run=dry_run)
+    if r is None:
+        raise HTTPException(404, "No customer with that phone number.")
+    if not dry_run:
+        await c.events.warn("CUSTOMER_ERASED", tenant_id=tenant_id, **{k: v for k, v in r.items() if k != "dry_run"})      # counts only, never the number
+    return r
 
 
 # ═══════════════════════ tenant: orders ═══════════════════════

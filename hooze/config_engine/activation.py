@@ -114,6 +114,7 @@ async def _seed_catalog(db, catalog: list[dict]) -> dict:
         for k, v in (await _sync_options(db, product_id, p["groups"], groups, mods_by_group)).items():
             stats[k] += v
 
+    removed_ids: set = set()
     for row in [*existing.values(), *stale]:                                                 # what is left was not in the config
         for g in [g for g in groups if g["product_id"] == row["id"]]:
             for m in mods_by_group.get(g["id"], []):
@@ -121,7 +122,33 @@ async def _seed_catalog(db, catalog: list[dict]) -> dict:
             await db.table("modifier_groups").delete().eq("id", g["id"]).execute()
         await db.table("products").delete().eq("id", row["id"]).execute()
         stats["products_removed"] += 1
+        removed_ids.add(row["id"])
+    if removed_ids:                                                                            # a half-built item in an open cart must not keep naming a product that is gone
+        for o in (await db.table("orders").select("id,draft").eq("status", "CART").execute()).data or []:
+            if (o.get("draft") or {}).get("product_id") in removed_ids:
+                await db.table("orders").update({"draft": None}).eq("id", o["id"]).execute()
     return stats
+
+
+def _recipe(llm) -> str:
+    f = getattr(llm, "embedding_recipe", None)
+    return f() if callable(f) else ""
+
+
+async def reindex_knowledge(pdb, llm, tenant_id: str) -> dict:
+    """Re-embed a client's knowledge from its ACTIVE config without activating anything (used after the embedding model changes).
+    Idempotent: documents already embedded with the current model are skipped by hash."""
+    db = pdb.for_tenant(tenant_id)
+    row = first((await db.table("tenant_configs").select("*").eq("status", "active").limit(1).execute()))
+    if not row:
+        return {"status": "no_active_config"}
+    bc = BusinessConfig.model_validate(row["config"])
+    docs = compile_config(bc, row["version"]).knowledge_docs
+    if not docs:
+        return {"status": "no_knowledge", "documents": 0}
+    async def embedder(t: str): return await llm.embed(tenant_id, t, kind="document")
+    stats = await sync_documents(db, embedder, docs, source="config", recipe=_recipe(llm))
+    return {"status": "failed" if stats["failed"] else "ok", "documents": len(docs), **stats}
 
 
 async def activate(pdb, llm, tenant_id: str, bc: BusinessConfig, *, configs=None, activated_by: Optional[str] = None) -> ActivationResult:
@@ -136,7 +163,7 @@ async def activate(pdb, llm, tenant_id: str, bc: BusinessConfig, *, configs=None
     seeded: dict = {}
     if compiled.knowledge_docs:
         async def embedder(t: str): return await llm.embed(tenant_id, t, kind="document")
-        seeded["knowledge"] = await sync_documents(db, embedder, compiled.knowledge_docs, source="config")
+        seeded["knowledge"] = await sync_documents(db, embedder, compiled.knowledge_docs, source="config", recipe=_recipe(llm))
         if seeded["knowledge"]["failed"]:
             # Never flip a tenant live with a partly-empty knowledge base. Seeds already written are harmless (no active config
             # points at them yet) and a retry is cheap: unchanged docs are skipped by the content hash.

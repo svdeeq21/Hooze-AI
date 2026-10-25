@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     inbound_recovery_min_age_seconds: int = 20  # never steal a row the webhook's own task is about to process
     inbound_max_concurrency: int = 10           # simultaneous turns in this process (protects LLM rate limits)
     inbound_retention_days: int = 7
+    message_retention_days: int = 0      # 0 = keep chat history forever. Set N to delete messages older than N days (and the summaries built from them). Decide with your lawyer.
     # alerts (all optional; with none configured, alerts are only logged)
     alert_whatsapp_numbers: str = ""            # comma-separated, digits with country code, e.g. 2348012345678
     alert_channel_id: str = ""                  # which WhatsApp number SENDS alerts (default: the first active one). Use a dedicated ops number.
@@ -53,7 +54,7 @@ class Settings(BaseSettings):
     # LLM providers (platform-owned keys; per-tenant BYO keys are a Tier-B feature)
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.8-flash"
-    embedding_model: str = "models/gemini-embedding-2-preview"
+    embedding_model: str = "gemini-embedding-2"   # GA. The old "gemini-embedding-2-preview" was shut down by Google on 10 Aug 2026
     embedding_dims: int = 768
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"

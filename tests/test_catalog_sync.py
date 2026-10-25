@@ -135,3 +135,51 @@ async def test_checkout_still_works_when_everything_is_still_sold(food_world):
     await ready_cart(w)
     w.llm.say("x", ("checkout", {})); await w.send("pay")
     assert order(w)[0]["status"] == "PAYMENT_PENDING" and len(w.db.rows("payments")) == 1
+
+
+# ── checkout re-prices from the live menu and never charges an amount the customer has not seen ──
+async def _pickup(w):
+    w.llm.say("ok", ("set_fulfillment", {"method": "PICKUP"})); await w.send("pickup")
+
+
+async def test_a_price_raised_after_the_item_was_added_is_shown_and_confirmed_before_any_charge(food_world):
+    w = food_world
+    await add(w, "Chapman", qty=2); await _pickup(w)
+    old_total = order(w)[0]["subtotal_minor"]
+    bc = food_config(); bc.offerings[1].price_minor = 1_200_00                          # Chapman gets dearer while the cart is open
+    await reactivate(w, bc)
+    w.llm.say("x", ("checkout", {})); await w.send("pay")
+    reply = w.last_reply()
+    assert "prices changed" in reply and "Chapman" in reply and w.db.rows("payments") == [] and order(w)[0]["status"] == "CART"
+    assert order(w)[0]["subtotal_minor"] == 2 * 1_200_00 != old_total and "2,400" in reply                  # shows the new total
+    w.llm.say("x", ("checkout", {})); await w.send("pay")                                                     # customer confirms by asking again
+    (p,) = w.db.rows("payments")
+    assert p["amount_minor"] == 2 * 1_200_00 and order(w)[0]["status"] == "PAYMENT_PENDING"
+
+
+async def test_an_option_price_change_is_picked_up_at_checkout_and_a_price_drop_is_also_confirmed_first(food_world):
+    w = food_world
+    await ready_cart(w)                                                                  # Cheese box, Large
+    before = order(w)[0]["subtotal_minor"]
+    bc = food_config(); bc.offerings[0].option_groups[0].options[1].price_minor = 100_00   # Large is now cheaper
+    await reactivate(w, bc)
+    w.llm.say("x", ("checkout", {})); await w.send("pay")
+    assert "prices changed" in w.last_reply() and order(w)[0]["subtotal_minor"] < before and w.db.rows("payments") == []
+    w.llm.say("x", ("checkout", {})); await w.send("pay")
+    assert w.db.rows("payments")[0]["amount_minor"] == order(w)[0]["subtotal_minor"]
+
+
+async def test_nothing_changed_means_no_extra_confirmation_step(food_world):
+    w = food_world
+    await ready_cart(w)
+    w.llm.say("x", ("checkout", {})); await w.send("pay")
+    assert "prices changed" not in w.last_reply() and len(w.db.rows("payments")) == 1
+
+
+async def test_a_half_built_item_for_a_removed_product_is_dropped_from_the_open_cart(food_world):
+    w = food_world
+    await add(w, BOX, qty=1)                                                             # box needs options -> stays a draft
+    assert order(w)[0]["draft"]
+    bc = food_config(); bc.offerings = [o for o in bc.offerings if o.name != BOX]
+    await reactivate(w, bc)
+    assert order(w)[0]["draft"] is None

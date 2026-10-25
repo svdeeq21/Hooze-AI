@@ -38,9 +38,27 @@ class ConversationStore:
             return row, False
 
     async def get_or_create_conversation(self, contact_id: str, channel_id: str, initial_state: str) -> dict:
-        row = first(await self.db.table("conversations").select("*").eq("contact_id", contact_id).eq("channel_id", channel_id).limit(1).execute())
-        if row:
-            return row
+        """ONE conversation per customer per client, however many WhatsApp numbers the client has. A customer who writes to a second number
+        continues the same chat (history, summary, stage, hand-off) instead of starting over; the conversation simply moves to the number
+        they wrote to last, so replies, receipts and follow-ups go out from where they are talking.
+        Customers who ALREADY have one conversation per number (created before this) keep each as it is until an operator merges them
+        (`merge_contact_conversations`); we never guess-merge live history on the hot path."""
+        rows = (await self.db.table("conversations").select("*").eq("contact_id", contact_id).execute()).data or []
+        for r in rows:
+            if r["channel_id"] == channel_id:
+                return r
+        if rows:
+            keeper = max(rows, key=lambda r: str(r.get("last_inbound_at") or r.get("created_at") or ""))
+            try:
+                await self.db.table("conversations").update({"channel_id": channel_id}).eq("id", keeper["id"]).execute()
+                return {**keeper, "channel_id": channel_id}
+            except Exception as e:
+                if not is_unique_violation(e):
+                    raise
+                row = first(await self.db.table("conversations").select("*").eq("contact_id", contact_id).eq("channel_id", channel_id).limit(1).execute())
+                if row is None:
+                    raise
+                return row
         try:
             ins = await self.db.table("conversations").insert({
                 "contact_id": contact_id, "channel_id": channel_id, "state": initial_state, "status": "active",
@@ -50,7 +68,7 @@ class ConversationStore:
         except Exception as e:
             if not is_unique_violation(e):
                 raise
-            row = first(await self.db.table("conversations").select("*").eq("contact_id", contact_id).eq("channel_id", channel_id).limit(1).execute())
+            row = first(await self.db.table("conversations").select("*").eq("contact_id", contact_id).limit(1).execute())
             if row is None:
                 raise
             return row                                  # lost a race on unique(tenant_id, contact_id, channel_id)

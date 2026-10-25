@@ -43,6 +43,13 @@ class ProviderReport:
         return bool(self.results) and all(r.ok for r in self.results if r.label != "embedding")
 
     @property
+    def embedding_problem(self) -> Optional[str]:
+        """Embeddings are optional PER PROVIDER (Groq has none), so they do not make a provider 'unhealthy' for chat, but a provider that
+        HAS an embedding model and fails it means knowledge/FAQ lookups are down. That must never pass silently (a retired model did)."""
+        bad = [r for r in self.results if r.label == "embedding" and not r.ok]
+        return bad[0].detail if bad else None
+
+    @property
     def turn_seconds(self) -> Optional[float]:
         t = [r for r in self.results if r.label == "realistic turn" and r.ok]
         return t[0].seconds if t else None
@@ -87,6 +94,10 @@ def recommend(reports: list[ProviderReport]) -> str:
     order = ",".join(r.name for r in good)
     fastest = good[0]
     lines = [f"Recommended first: {fastest.name} ({fastest.model}), realistic turn in {fastest.turn_seconds:.1f}s.", f"  LLM_PROVIDER_ORDER={order}"]
+    for r in reports:
+        if r.embedding_problem:
+            lines.append(f"⚠ {r.name} EMBEDDINGS ARE FAILING (model {r.model} / EMBEDDING_MODEL): {r.embedding_problem}\n"
+                         "  Knowledge and FAQ lookups are down. Set EMBEDDING_MODEL=gemini-embedding-2, redeploy, then POST /v1/platform/embeddings/reindex.")
     bad = [r for r in reports if not r.healthy]
     if bad:
         lines.append("Not healthy right now: " + ", ".join(f"{r.name} ({r.model})" for r in bad) + ". Leave them as a fallback only if they recover.")
@@ -97,6 +108,8 @@ def print_report(rep: ProviderReport) -> None:
     print(f"\n{rep.name}  model={rep.model}")
     for r in rep.results:
         mark = "OK    " if r.ok else "FAILED"
+        if r.label == "embedding" and not r.ok:
+            mark = "BROKEN"
         print(f"  {r.label:<15} {mark} {r.seconds:5.1f}s  {r.detail}")
 
 

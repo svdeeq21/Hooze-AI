@@ -59,3 +59,20 @@ async def test_it_gives_up_after_three_connection_failures():
     with pytest.raises(httpx.ConnectTimeout):
         await adapter(handler).send_text("+2348012345678", "hello")
     assert len(n) == 3
+
+
+async def test_delete_instance_logs_out_then_deletes_and_treats_a_missing_instance_as_already_gone():
+    from hooze.channels.evolution import delete_instance
+    calls = []
+    def handler(req):
+        calls.append((req.method, req.url.path, req.headers.get("apikey")))
+        return httpx.Response(200, json={})
+    make = lambda timeout=20.0: httpx.AsyncClient(timeout=timeout, transport=httpx.MockTransport(handler))
+    assert await delete_instance("http://evo.test/", "KEY", "inst-1", make) == "deleted"
+    assert calls == [("DELETE", "/instance/logout/inst-1", "KEY"), ("DELETE", "/instance/delete/inst-1", "KEY")]
+    gone = lambda timeout=20.0: httpx.AsyncClient(timeout=timeout, transport=httpx.MockTransport(lambda r: httpx.Response(404, text="nope")))
+    assert await delete_instance("http://evo.test", "KEY", "inst-1", gone) == "gone"
+    boom = lambda timeout=20.0: httpx.AsyncClient(timeout=timeout, transport=httpx.MockTransport(lambda r: httpx.Response(500, text="x")))
+    import pytest
+    with pytest.raises(RuntimeError, match="500"):
+        await delete_instance("http://evo.test", "KEY", "inst-1", boom)

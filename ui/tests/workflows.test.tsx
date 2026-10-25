@@ -1,5 +1,5 @@
 /** Drives the real dashboard components against the real hooze-core API (seeded demo data) over HTTP. */
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App, makeQueryClient } from "../src/App";
@@ -226,6 +226,64 @@ describe("whatsapp and settings", () => {
     await waitFor(async () => expect((await api.tenant(t.id)).api_keys.find((k) => k.label === "owner")!.revoked_at).toBeTruthy());
     await user.click(await screen.findByRole("button", { name: /reset follow-up progress/i }));
     expect(await screen.findByText(/Follow-up progress reset/i)).toBeInTheDocument();
+  });
+  it("creates a read-only key and shows each key's access level", async () => {
+    const t = await tenantByName("Praise Dynasty Properties");
+    const user = userEvent.setup();
+    await open(t.id, "settings");
+    await user.type(await screen.findByLabelText(/new key label/i), "accountant");
+    await user.selectOptions(screen.getByLabelText(/key access/i), "viewer");
+    expect(screen.getByText(/^Read-only\./)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /create key/i }));
+    await user.click(await screen.findByRole("button", { name: /close/i }));
+    await waitFor(async () => expect((await api.tenant(t.id)).api_keys.find((k) => k.label === "accountant")?.role).toBe("viewer"));
+    const item = (await screen.findByText("accountant")).closest("li")!;
+    expect(within(item).getByText("viewer")).toBeInTheDocument();
+  });
+  it("previews unused photos and duplicate chats, and rebuilds the search index", async () => {
+    const t = await tenantByName("Praise Dynasty Properties");
+    const user = userEvent.setup();
+    await open(t.id, "settings");
+    await user.click(await screen.findByRole("button", { name: /preview unused files/i }));
+    expect(await screen.findByText(/unused file\(s\) would be deleted/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /check for duplicates/i }));
+    expect(await screen.findByText(/no customer has duplicate chats/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /rebuild search index/i }));
+    expect(await screen.findByText(/search index up to date/i)).toBeInTheDocument();
+  });
+  it("downloads a customer's data and previews an erasure without changing anything", async () => {
+    const t = await tenantByName("Praise Dynasty Properties");
+    const phone = (await api.conversations(t.id))[0].contact!.phone;
+    (URL as any).createObjectURL = () => "blob:test"; (URL as any).revokeObjectURL = () => {};
+    const user = userEvent.setup();
+    await open(t.id, "settings");
+    expect(await screen.findByRole("button", { name: /download their data/i })).toBeDisabled();       // needs a number first
+    await user.type(await screen.findByLabelText(/customer's phone number/i), phone);
+    await user.click(screen.getByRole("button", { name: /download their data/i }));
+    expect(await screen.findByText(/^Downloaded\./)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /preview erasing/i }));
+    expect(await screen.findByText(/would erase/i)).toBeInTheDocument();
+    expect((await api.conversations(t.id)).some((c) => c.contact?.phone === phone)).toBe(true);        // a preview deletes nothing
+  });
+  it("deletes a client only after it is paused and its id is typed", async () => {
+    const made = await api.createTenant("to-delete", "To Delete");
+    const id = made.tenant.id;
+    const user = userEvent.setup();
+    await open(id, "settings");
+    const typed = await screen.findByLabelText(/confirm client id/i);
+    expect(typed).toBeDisabled();                                                                    // not paused yet
+    cleanup();                                                                                         // re-open from scratch once the client is paused
+    await api.patchTenant(id, { status: "suspended" });
+    await open(id, "settings");
+    const box = await screen.findByLabelText(/confirm client id/i);
+    await waitFor(() => expect(box).toBeEnabled());
+    const btn = screen.getByRole("button", { name: /delete client/i });
+    expect(btn).toBeDisabled();
+    await user.type(box, "wrong-id");
+    expect(btn).toBeDisabled();
+    await user.clear(box); await user.type(box, "to-delete");
+    await user.click(btn);
+    await waitFor(async () => expect((await api.tenants()).some((x) => x.id === id)).toBe(false));
   });
   it("pauses and resumes a client's assistant from the overview", async () => {
     const t = await tenantByName("Praise Dynasty Properties");

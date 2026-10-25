@@ -55,14 +55,37 @@ class GeminiProvider:
             raise ValueError("gemini returned empty response")
         return text
 
+    @staticmethod
+    def _prompt_tasks(model: str) -> bool:
+        """gemini-embedding-2 and later REJECT the task_type parameter: the task is written into the text instead. gemini-embedding-001 still uses task_type."""
+        m = (model or "").lower().replace("models/", "")
+        return m.startswith("gemini-embedding-") and not m.startswith("gemini-embedding-001") and not m.startswith("gemini-embedding-exp")
+
     async def embed(self, text: str, dims: int, kind: str = "query") -> list[float]:
-        """kind="document" for text being INDEXED, "query" for the customer's question: Gemini embeds the two differently on purpose,
-        so indexing with the query type (what this used to do) lowers match quality."""
+        """kind="document" for text being INDEXED, "query" for the customer's question. The two are embedded differently on purpose:
+          * gemini-embedding-2:   no task_type; query -> `task: search result | query: …`, document -> `title: … | text: …` (Google's documented format)
+          * gemini-embedding-001: task_type RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY
+        The two models' vectors are NOT comparable, so changing EMBEDDING_MODEL means every stored document must be re-embedded
+        (activation does this automatically because the model name is part of each document's hash)."""
         from google.genai import types
-        task = "RETRIEVAL_DOCUMENT" if kind == "document" else "RETRIEVAL_QUERY"
-        r = await self._c().aio.models.embed_content(model=self.embedding_model, contents=text,
-                                                     config=types.EmbedContentConfig(task_type=task, output_dimensionality=dims))
-        return list(r.embeddings[0].values)
+        if self._prompt_tasks(self.embedding_model):
+            if kind == "document":
+                title, _, body = text.partition("\n")
+                content = f"title: {title.strip() or 'none'} | text: {body.strip() or title.strip()}" if body else f"title: none | text: {text}"
+            else:
+                content = f"task: search result | query: {text}"
+            cfg = types.EmbedContentConfig(output_dimensionality=dims)
+        else:
+            content = text
+            cfg = types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT" if kind == "document" else "RETRIEVAL_QUERY", output_dimensionality=dims)
+        r = await self._c().aio.models.embed_content(model=self.embedding_model, contents=content, config=cfg)
+        return _unit(list(r.embeddings[0].values))
+
+
+def _unit(v: list[float]) -> list[float]:
+    """Vectors shortened below the model's full size are not unit length; normalise so similarity scores mean the same everywhere."""
+    n = sum(x * x for x in v) ** 0.5
+    return v if n == 0 or abs(n - 1.0) < 1e-3 else [x / n for x in v]
 
 
 class OpenAICompatProvider:
@@ -149,6 +172,12 @@ class LLMGateway:
                  now: Callable[[], float] = time.monotonic):
         self.providers, self.timeout, self.dims, self._usage, self.events = providers, timeout, embedding_dims, usage, events
         self.cooldown, self._now, self._cool = provider_cooldown, now, {}
+        self._last_embed_error: dict[str, str] = {}
+
+    def embedding_recipe(self) -> str:
+        """Identifies HOW stored vectors were made (provider + model + size). Part of each knowledge document's hash, so switching the
+        embedding model re-embeds everything on the next activation instead of leaving vectors that no longer match the questions."""
+        return "|".join(f"{p.name}:{p.embedding_model}:{self.dims}" for p in self.providers if getattr(p, "embedding_model", None))
 
     def status(self) -> list[dict]:
         """For the operator health panel: which providers are configured and whether any is being skipped right now."""
@@ -236,19 +265,27 @@ class LLMGateway:
         last: Exception | None = None
         for p in self.providers:
             if fail_fast and self._cooling(p, "embed"):
-                last = last or RuntimeError(f"{p.name} embedding cooling down")
+                if self._last_embed_error.get(p.name):                      # keep the REAL reason visible while the provider is being skipped
+                    last = last or RuntimeError(f"{p.name} skipped after failing: {self._last_embed_error[p.name]}")
+                else:
+                    last = last or RuntimeError(f"{p.name} embedding cooling down")
                 continue
             try:
                 v = await asyncio.wait_for(p.embed(text, self.dims, kind), self.timeout)
                 self._clear(p, "embed")
+                self._last_embed_error.pop(p.name, None)
                 await self._meter(tenant_id, "embedding", p.name, "embed", 0)
                 return v
             except NotImplementedError:
                 continue
             except Exception as e:
                 last = e
+                self._last_embed_error[p.name] = str(e)[:200]
                 self._trip(p, "embed")
-        raise LLMUnavailable(f"no embedding provider available: {last}")
+        hint = ""
+        if last is not None and any(k in str(last).lower() for k in ("not_found", "404", "not found", "no longer", "deprecated", "shut down")):
+            hint = " — the embedding model may have been retired by Google: set EMBEDDING_MODEL=gemini-embedding-2, redeploy, then re-index"
+        raise LLMUnavailable(f"no embedding provider available: {last}{hint}")
 
 
 def build_default_gateway(settings, usage: Optional[UsageRecorder] = None, events=None) -> LLMGateway:

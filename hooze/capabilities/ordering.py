@@ -248,6 +248,26 @@ class OrderingCapability(Capability):
             if gone:                                             # removed from the menu or sold out since it was added: never charge for it
                 lines = ", ".join(f"#{n} {its[n - 1]['product_name']}" for n in gone)
                 raise BusinessRuleError(f"Before checkout — {lines} isn't available any more. Please remove it from your order (or choose something else) and then we'll continue.")
+            # Prices are re-read from the live menu at the moment of payment. If the owner changed a price (or an option's price) after the
+            # customer added the item, the cart is brought up to date and the customer is told BEFORE anything is charged: they never pay an
+            # amount they haven't seen. Asking to pay again then goes straight through (the prices are now current).
+            by_id = {p["id"]: p for p in live}
+            changes = []
+            for n, it in enumerate(its, 1):
+                p = by_id.get(it.get("product_id"))
+                if not p:
+                    continue
+                now_mod = {m["id"]: m["price_minor"] for g in p["groups"] for m in g["modifiers"]}
+                mods = [{**m, "price_minor": now_mod.get(m.get("id"), m.get("price_minor"))} for m in (it.get("modifiers") or [])]
+                total = line_total_minor(p["price_minor"], [m["price_minor"] for m in mods], it["quantity"])
+                if total != it["line_total_minor"] or p["price_minor"] != it["unit_price_minor"]:
+                    await self.ctx.db.table("order_items").update({"unit_price_minor": p["price_minor"], "modifiers": mods, "line_total_minor": total}).eq("id", it["id"]).execute()
+                    changes.append(f"#{n} {it['product_name']}: {fmt_money(it['line_total_minor'], cur())} → {fmt_money(total, cur())}")
+            if changes:
+                await self._recalc(cart["id"])
+                cart = await self.find_cart(turn.contact["id"])
+                raise BusinessRuleError("Heads-up — some prices changed since you added these items:\n" + "\n".join(f"• {c}" for c in changes)
+                                        + f"\n\nYour new total is {fmt_money(cart['subtotal_minor'], cur())}. Say \"pay\" to go ahead at the new price, or tell me what you'd like to change.")
             amount = cart["subtotal_minor"]                      # food only, always (delivery fee confirmed by a human after payment)
             # A NEW reference per attempt. Paystack refuses a reference it has already seen, so a retry after a failure that happened
             # AFTER Paystack accepted the first one (timeout, our DB write failing) must not reuse it, or the customer could never pay.
