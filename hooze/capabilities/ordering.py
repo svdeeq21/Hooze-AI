@@ -18,6 +18,7 @@ Changes: line refs (#1, #2) instead of UUIDs in prompts; integer minor units; pe
 """
 from __future__ import annotations
 import re
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -239,8 +240,18 @@ class OrderingCapability(Capability):
                 raise BusinessRuleError("Your cart is empty — what would you like to order?")
             if not cart.get("fulfillment_method"):
                 raise BusinessRuleError("Before checkout — will this be pickup or delivery?")
+            live = await self.load_catalog()                     # available products/options only
+            live_products = {p["id"] for p in live}
+            live_options = {m["id"] for p in live for g in p["groups"] for m in g["modifiers"]}
+            gone = [n for n, it in enumerate(its, 1) if it.get("product_id") and (it["product_id"] not in live_products
+                    or any(m.get("id") and m["id"] not in live_options for m in (it.get("modifiers") or [])))]
+            if gone:                                             # removed from the menu or sold out since it was added: never charge for it
+                lines = ", ".join(f"#{n} {its[n - 1]['product_name']}" for n in gone)
+                raise BusinessRuleError(f"Before checkout — {lines} isn't available any more. Please remove it from your order (or choose something else) and then we'll continue.")
             amount = cart["subtotal_minor"]                      # food only, always (delivery fee confirmed by a human after payment)
-            reference = f"{self.ctx.tenant_id[:8]}_{cart['id']}"
+            # A NEW reference per attempt. Paystack refuses a reference it has already seen, so a retry after a failure that happened
+            # AFTER Paystack accepted the first one (timeout, our DB write failing) must not reuse it, or the customer could never pay.
+            reference = f"{self.ctx.tenant_id[:8]}_{cart['id']}_{uuid.uuid4().hex[:8]}"
             await self._touch(cart["id"], status="PAYMENT_PENDING")
             try:
                 provider = await self.ctx.extras["payments"]()
@@ -354,9 +365,17 @@ class OrderingCapability(Capability):
         if int(verified.get("amount_minor", -1)) != int(pay["amount_minor"]):
             await self.ctx.events.error("PAYMENT_AMOUNT_MISMATCH", tenant_id=self.ctx.tenant_id, reference=reference, expected=pay["amount_minor"], got=verified.get("amount_minor"))
             return None
-        # Exactly-once guard = a conditional UPDATE per source status (each is atomic, so no pre-read race). The normal path is
-        # PAYMENT_PENDING -> PAID. A verified, amount-matched payment that arrives AFTER the checkout expired (tick) or was
-        # cancelled by the customer is STILL the customer's money: it used to fall through to "duplicate" and vanish silently.
+        # Two writes that can never be one transaction here, so they are ORDERED to be self-healing. Provider retries (we answer 5xx on any
+        # failure) re-run both steps, and each step is idempotent:
+        #   1. record the verified payment as `success` (conditional on it not being success already; `claimed` = this call did it).
+        #      A crash after this leaves payment=success, order still waiting -> the retry's step 2 completes the job.
+        #      (The old order — order first, payment second — left order=PAID with payment=pending; the retry then saw "already PAID",
+        #       ignored it, and the customer and staff were never told.)
+        #   2. exactly-once order transition = a conditional UPDATE per source status (atomic, no pre-read race). The normal path is
+        #      PAYMENT_PENDING -> PAID. A verified, amount-matched payment that arrives AFTER the checkout expired (tick) or was cancelled
+        #      is STILL the customer's money, so those also become PAID (and staff are told to fulfil or refund).
+        claimed = bool((await self.ctx.db.table("payments").update({"status": "success", "verified_at": self.ctx.clock().isoformat()})
+                        .eq("id", pay["id"]).neq("status", "success").execute()).data)
         paid_at, late, won = self.ctx.clock().isoformat(), None, None
         for source in ("PAYMENT_PENDING", "EXPIRED", "CANCELLED"):
             won = (await self.ctx.db.table("orders").update({"status": "PAID", "paid_at": paid_at}).eq("id", pay["order_id"]).eq("status", source).execute()).data
@@ -364,11 +383,19 @@ class OrderingCapability(Capability):
                 late = source if source != "PAYMENT_PENDING" else None
                 break
         if not won:
+            # The order was already paid. Same payment delivered again (benign), or a DIFFERENT payment for the same order (the customer
+            # holds two links, e.g. after a checkout retry, and paid both): that one must be refunded by a human.
+            if claimed:
+                others = (await self.ctx.db.table("payments").select("id").eq("order_id", pay["order_id"]).eq("status", "success").neq("id", pay["id"]).execute()).data or []
+                if others:
+                    await self.ctx.events.warn("PAYMENT_DOUBLE_PAYMENT", tenant_id=self.ctx.tenant_id, reference=reference, ref_type="order", ref_id=pay["order_id"])
+                    await self.ctx.outbox.notify_staff(f"⚠️ A customer paid TWICE for the same order ({fmt_money(int(pay['amount_minor']), self.ctx.config.currency)} extra, reference {reference}). "
+                                                       "The order is already marked paid — please refund the second payment in Paystack.")
+                    return None
             await self.ctx.events.info("PAYMENT_DUPLICATE_IGNORED", tenant_id=self.ctx.tenant_id, reference=reference)
             return None                                   # exactly-once: a redelivery finds the row already PAID
         if late:
             await self.ctx.events.warn(f"PAYMENT_AFTER_{late}", tenant_id=self.ctx.tenant_id, reference=reference, ref_type="order", ref_id=pay["order_id"])
-        await self.ctx.db.table("payments").update({"status": "success", "verified_at": self.ctx.clock().isoformat()}).eq("id", pay["id"]).execute()
         order = won[0]
         contact = first(await self.ctx.db.table("contacts").select("*").eq("id", order["contact_id"]).limit(1).execute())
         cur = self.ctx.config.currency

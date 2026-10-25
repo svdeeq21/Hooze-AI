@@ -123,3 +123,31 @@ async def test_activation_still_works_before_migration_0005_is_run():
     assert res.data == [{"name": "A"}]
     res = await _write(DB(), "update", {"name": "A"}, {"category": "", "media": []}, "id1")      # nothing to decorate: plain write
     assert res.data == [{"name": "A"}]                    # even with nothing to decorate, a missing column must not block activation
+
+
+async def test_staff_alerts_fail_over_to_the_next_active_number_when_the_first_is_down():
+    from tests.fakes import FakeAdapter
+    w = await make_world(food_config())
+    ch2 = (await w.pdb.table("channels").insert({"tenant_id": w.tid, "kind": "whatsapp_evolution", "instance_name": "second", "config": {},
+                                                  "secret_hash": "0" * 64, "status": "active"}).execute()).data[0]
+    broken, good = FakeAdapter(), FakeAdapter()
+    async def down(*a, **k): raise RuntimeError("instance disconnected")
+    broken.send_text = down
+    class Factory:
+        def for_channel(self, channel): return good if channel["id"] == ch2["id"] else broken
+    box = Outbox(w.pdb, Factory(), w.tid, ["2348011111111", "2348022222222"], w.events)
+    assert await box.notify_staff("🔔 new order") == 2
+    assert [(to, t) for to, t, *_ in good.sent] == [("2348011111111", "🔔 new order"), ("2348022222222", "🔔 new order")]
+    assert "STAFF_ALERT_FAILED" not in w.sink.names()
+
+
+async def test_staff_alerts_report_a_failure_only_when_every_number_failed():
+    from tests.fakes import FakeAdapter
+    w = await make_world(food_config())
+    a = FakeAdapter()
+    async def down(*a_, **k): raise RuntimeError("banned")
+    a.send_text = down
+    class Factory:
+        def for_channel(self, channel): return a
+    box = Outbox(w.pdb, Factory(), w.tid, ["2348011111111"], w.events)
+    assert await box.notify_staff("x") == 0 and "STAFF_ALERT_FAILED" in w.sink.names()

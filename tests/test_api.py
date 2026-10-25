@@ -70,15 +70,32 @@ async def test_webhook_rejects_missing_or_wrong_secret_and_never_reaches_the_pip
     assert rec.calls == [] and w.sink.names().count("WEBHOOK_AUTH_FAILED") == 3
 
 
-async def test_webhook_accepts_header_or_query_token_and_hands_off_to_the_pipeline(re_world):
+async def test_webhook_accepts_header_and_hands_off_to_the_pipeline(re_world):
     w, rec = re_world, RecPipeline()
     async with client(container(w, pipeline=rec)) as c:
         url = f"/v1/webhooks/whatsapp/{w.channel['id']}"
         r1 = await c.post(url, json=wa_body("one", msg_id="W1"), headers={"x-hooze-secret": "s3cret"})
-        r2 = await c.post(f"{url}?token=s3cret", json=wa_body("two", msg_id="W2"))
         ignored = await c.post(url, json=wa_body(event="connection.update"), headers={"x-hooze-secret": "s3cret"})
-    assert (r1.json(), r2.json(), ignored.json()) == ({"status": "accepted"}, {"status": "accepted"}, {"status": "ignored"})
-    assert [i.text for _, i in rec.calls] == ["one", "two"] and rec.calls[0][0]["tenant_id"] == w.tid
+    assert (r1.json(), ignored.json()) == ({"status": "accepted"}, {"status": "ignored"})
+    assert [i.text for _, i in rec.calls] == ["one"] and rec.calls[0][0]["tenant_id"] == w.tid
+
+
+async def test_webhook_query_token_is_rejected_by_default_and_says_why(re_world):
+    w, rec = re_world, RecPipeline()
+    async with client(container(w, pipeline=rec)) as c:
+        url = f"/v1/webhooks/whatsapp/{w.channel['id']}"
+        r = await c.post(f"{url}?token=s3cret", json=wa_body("two", msg_id="W2"))
+    assert r.status_code == 401 and rec.calls == []
+    assert "WEBHOOK_QUERY_TOKEN_REJECTED" in w.sink.names()
+
+
+async def test_webhook_query_token_works_only_when_explicitly_enabled(re_world):
+    w, rec = re_world, RecPipeline()
+    cont = container(w, pipeline=rec)
+    cont.settings.webhook_allow_query_token = True
+    async with client(cont) as c:
+        r = await c.post(f"/v1/webhooks/whatsapp/{w.channel['id']}?token=s3cret", json=wa_body("two", msg_id="W2"))
+    assert r.json() == {"status": "accepted"}
 
 
 async def test_webhook_unknown_malformed_and_disabled_channels_are_404_or_400(re_world):
@@ -208,7 +225,7 @@ async def test_full_onboarding_flow_create_connect_activate_then_serve_a_custome
         payload["integrations"]["channel_connected"] = True                          # client CLAIMS a channel exists...
         r = await c.post(f"/v1/tenants/{tid}/config/validate", json=payload, headers=T)
         assert r.status_code == 200 and "integrations.channel" in {i["code"] for i in r.json()["blocking"]}           # ...the server checks the database instead
-        assert (await c.post(f"/v1/tenants/{tid}/config/activate", json=payload, headers=T)).status_code == 422
+        assert (await c.post(f"/v1/tenants/{tid}/config/activate", json=payload, headers=P)).status_code == 422
 
         ch = (await c.post(f"/v1/platform/tenants/{tid}/channels", json={"instance_name": "bright", "base_url": "http://evo.test", "api_key": "EVO-KEY-123"}, headers=P)).json()
         row = next(r for r in w.db.rows("channels") if r["id"] == ch["channel_id"])
@@ -216,9 +233,9 @@ async def test_full_onboarding_flow_create_connect_activate_then_serve_a_custome
         assert c_.vault.decrypt(row["credentials_enc"]) == "EVO-KEY-123" and ch["webhook_url"] == f"https://api.test/v1/webhooks/whatsapp/{ch['channel_id']}"
 
         w.llm.embed_fail = True
-        assert (await c.post(f"/v1/tenants/{tid}/config/activate", json=payload, headers=T)).status_code == 503         # dependency outage != bad config
+        assert (await c.post(f"/v1/tenants/{tid}/config/activate", json=payload, headers=P)).status_code == 503         # dependency outage != bad config
         w.llm.embed_fail = False
-        act = await c.post(f"/v1/tenants/{tid}/config/activate", json=payload, headers=T)
+        act = await c.post(f"/v1/tenants/{tid}/config/activate", json=payload, headers=P)
         assert act.status_code == 200 and act.json()["version"] == 1 and act.json()["report"]["ok"]
         assert next(t for t in w.db.rows("tenants") if t["id"] == tid)["status"] == "active"
 

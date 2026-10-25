@@ -61,11 +61,27 @@ async def build() -> Container:
     alerts.bus = re_w.events
     return Container(settings=settings, pdb=re_w.pdb, llm=re_w.llm, events=re_w.events, adapters=adapters, configs=re_w.configs, pipeline=re_w.pipeline,
                      vault=Vault(Vault.generate_key()), payments_for=payments_for, clock=clock, inbox=inbox, alerts=alerts, maintenance=Maintenance(inbox, re_w.pdb, adapters, re_w.events, settings, clock),
-                     media=MemoryMediaStorage())      # demo only: uploads work end to end but the in-memory links are not viewable
+                     media=MemoryMediaStorage(base=f"http://127.0.0.1:{PORT}/demo-media"))      # demo only: served from memory by the route in make_app()
+
+
+async def make_app():
+    """The demo app. Its in-memory storage hands out links, so this serves those bytes back; otherwise an uploaded photo's link is dead."""
+    from fastapi import HTTPException, Response
+    container = await build()
+    app = create_app(container)
+
+    @app.get("/demo-media/{path:path}")
+    async def demo_media(path: str):
+        stored = container.media.files.get(path)
+        if stored is None:
+            raise HTTPException(404, "not found")
+        data, content_type = stored
+        return Response(content=data, media_type=content_type, headers={"cache-control": "no-store"})
+    return app
 
 
 async def main():
-    app = create_app(await build())
+    app = await make_app()
     print(f"\n  DEMO API  http://127.0.0.1:{PORT}   operator key: {DEMO_KEY}\n", flush=True)
     await uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="warning")).serve()
 

@@ -15,9 +15,10 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from hooze.api.deps import get_container, require_platform, require_tenant
+from hooze.api.deps import get_container, require_platform, require_tenant, require_tenant_admin
 from hooze.channels.evolution import create_instance as create_evolution_instance
 from hooze.kernel.db import first
+from hooze.media.cleanup import purge_tenant, sweep_tenant
 from hooze.media.processing import MediaError, process as process_media
 from hooze.media.storage import MediaStorageError
 from hooze.runtime.scheduler import run_tick
@@ -124,7 +125,7 @@ async def tenant_detail(tenant_id: str, request: Request):
     t = await _tenant_or_404(c, tenant_id)
     chans = (await c.pdb.table("channels").select("*").eq("tenant_id", tenant_id).eq("status", "active").order("created_at").execute()).data or []
     states = await asyncio.gather(*[_channel_state(c, ch) for ch in chans])
-    keys = (await c.pdb.table("api_keys").select("id, label, revoked_at, created_at").eq("tenant_id", tenant_id).order("created_at").execute()).data or []
+    keys = (await c.pdb.table("api_keys").select("id, label, role, revoked_at, created_at").eq("tenant_id", tenant_id).order("created_at").execute()).data or []
     db = c.pdb.for_tenant(tenant_id)
     integ = (await db.table("tenant_integrations").select("id, kind, status, config, created_at").execute()).data or []
     cfg = first(await db.table("tenant_configs").select("*").eq("status", "active").limit(1).execute())
@@ -151,8 +152,47 @@ async def patch_tenant(tenant_id: str, body: TenantPatch, request: Request):
     return {"tenant": row}
 
 
+@router.post("/v1/platform/tenants/{tenant_id}/media/cleanup", dependencies=[Depends(require_platform)])
+async def cleanup_media(tenant_id: str, request: Request, dry_run: bool = True):
+    """Delete uploaded files no live menu item uses (older than the age gate). Defaults to a DRY RUN that only lists what would go."""
+    c = get_container(request)
+    await _tenant_or_404(c, tenant_id)
+    if c.media is None:
+        raise HTTPException(503, "Media storage isn't set up on this server.")
+    try:
+        r = await sweep_tenant(c.pdb, c.media, tenant_id, now=c.clock(), min_age_hours=c.settings.media_orphan_min_age_hours, dry_run=dry_run)
+    except MediaStorageError as e:
+        raise HTTPException(502, f"Storage error: {str(e)[:160]}")
+    await c.events.info("MEDIA_CLEANUP_MANUAL", tenant_id=tenant_id, dry_run=dry_run, deleted=r["deleted"], would_delete=len(r["would_delete"]))
+    return {"dry_run": dry_run, **r}
+
+
+@router.delete("/v1/platform/tenants/{tenant_id}", dependencies=[Depends(require_platform)])
+async def delete_tenant(tenant_id: str, request: Request, confirm: str = ""):
+    """PERMANENTLY remove a client: every row (cascade) AND every uploaded file. Deliberately hard to do by accident:
+    the client must already be suspended, and `confirm` must equal its slug. Files go first; if that fails nothing is deleted."""
+    c = get_container(request)
+    t = await _tenant_or_404(c, tenant_id)
+    if t["status"] != "suspended":
+        raise HTTPException(409, "Pause (suspend) this client first, then delete.")
+    if confirm != t["slug"]:
+        raise HTTPException(422, f"To confirm, repeat the client's slug: {t['slug']}")
+    files = 0
+    if c.media is not None:
+        try:
+            files = await purge_tenant(c.media, tenant_id)
+        except MediaStorageError as e:
+            await c.events.error("TENANT_DELETE_FILES_FAILED", tenant_id=tenant_id, error=str(e)[:200])
+            raise HTTPException(502, "Couldn't delete this client's files from storage, so nothing was deleted. Try again.")
+    await c.pdb.table("tenants").delete().eq("id", tenant_id).execute()
+    c.configs.invalidate(tenant_id)
+    await c.events.warn("TENANT_DELETED", slug=t["slug"], name=t["name"], deleted_tenant_id=tenant_id, files_deleted=files)   # no tenant_id: the row is gone
+    return {"deleted": True, "slug": t["slug"], "files_deleted": files}
+
+
 class KeyIn(BaseModel):
     label: str = Field("operator", max_length=80)
+    role: str = Field("staff", pattern="^(admin|staff|viewer)$")
 
 
 @router.post("/v1/platform/tenants/{tenant_id}/api-keys", dependencies=[Depends(require_platform)])
@@ -160,8 +200,8 @@ async def create_key(tenant_id: str, body: KeyIn, request: Request):
     c = get_container(request)
     await _tenant_or_404(c, tenant_id)
     key = new_secret()
-    row = first(await c.pdb.table("api_keys").insert({"tenant_id": tenant_id, "key_hash": sha256_hex(key), "label": body.label}).execute())
-    return {"id": row["id"], "label": body.label, "api_key": key, "note": "Shown once."}
+    row = first(await c.pdb.table("api_keys").insert({"tenant_id": tenant_id, "key_hash": sha256_hex(key), "label": body.label, "role": body.role}).execute())
+    return {"id": row["id"], "label": body.label, "role": body.role, "api_key": key, "note": "Shown once."}
 
 
 @router.delete("/v1/platform/tenants/{tenant_id}/api-keys/{key_id}", dependencies=[Depends(require_platform)])
@@ -380,7 +420,7 @@ async def send_as_human(tenant_id: str, conversation_id: str, body: SendIn, requ
     return {"sent": True, "assistant_paused": True}
 
 
-@router.post("/v1/tenants/{tenant_id}/nudges/reset", dependencies=[Depends(require_tenant)])
+@router.post("/v1/tenants/{tenant_id}/nudges/reset", dependencies=[Depends(require_tenant_admin)])
 async def reset_nudges(tenant_id: str, request: Request):
     """Run BEFORE switching follow-ups from dry-run to live: dry-run advances each conversation's step, which would skip early templates.
     Opted-out / lost contacts are left alone (never re-enrol someone who said stop)."""
@@ -493,7 +533,7 @@ async def list_integrations(tenant_id: str, request: Request):
 
 
 # ── media: menu photos and videos ───────────────────────────────────────
-@router.post("/v1/tenants/{tenant_id}/media", dependencies=[Depends(require_tenant)])
+@router.post("/v1/tenants/{tenant_id}/media", dependencies=[Depends(require_tenant_admin)])
 async def upload_media(tenant_id: str, request: Request, file: UploadFile = File(...)):
     """Upload one photo or MP4 video for this client. Photos are rotated upright, shrunk and stripped of metadata; the file is stored
     in this tenant's own folder and the PUBLIC link is returned for the caller to put on a menu item. WhatsApp fetches that link."""

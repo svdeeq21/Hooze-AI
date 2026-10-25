@@ -322,3 +322,47 @@ async def test_removing_a_number_stops_its_webhook_hides_it_and_keeps_history(re
         assert hook.status_code in (403, 404)
         assert (await c.delete(f"/v1/platform/tenants/{w.tid}/channels/{w.channel['id']}")).status_code == 401
     assert w.db.rows("channels")[0]["status"] == "disabled" and "CHANNEL_REMOVED" in w.sink.names()
+
+
+# ── API key roles (migration 0006) ────────────────────────────────────
+async def _role_keys(c, tid):
+    out = {}
+    for role in ("admin", "staff", "viewer"):
+        r = await c.post(f"/v1/platform/tenants/{tid}/api-keys", json={"label": role, "role": role}, headers=P)
+        assert r.status_code == 200 and r.json()["role"] == role
+        out[role] = {"x-api-key": r.json()["api_key"]}
+    return out
+
+
+async def test_staff_key_cannot_change_settings_or_payment_keys_but_admin_can(re_world):
+    w = re_world
+    async with client(container(w)) as c:
+        k = await _role_keys(c, w.tid)
+        paystack = {"secret_key": "sk_test_x", "email_domain": "x.com"}
+        for name in ("staff", "viewer"):
+            assert (await c.post(f"/v1/tenants/{w.tid}/integrations/paystack", json=paystack, headers=k[name])).status_code == 403, name
+            assert (await c.post(f"/v1/tenants/{w.tid}/config/activate", json={}, headers=k[name])).status_code == 403, name
+            assert (await c.post(f"/v1/tenants/{w.tid}/nudges/reset", headers=k[name])).status_code == 403, name
+        assert (await c.post(f"/v1/tenants/{w.tid}/integrations/paystack", json=paystack, headers=k["admin"])).status_code == 200
+        assert (await c.post(f"/v1/tenants/{w.tid}/integrations/paystack", json=paystack, headers=P)).status_code == 200
+    assert not any(r["kind"] == "paystack" and r.get("credentials_enc") is None for r in w.db.rows("tenant_integrations"))
+
+
+async def test_staff_key_still_does_day_to_day_work_and_viewer_is_read_only(re_world):
+    w = re_world
+    async with client(container(w)) as c:
+        k = await _role_keys(c, w.tid)
+        assert (await c.get(f"/v1/tenants/{w.tid}/orders", headers=k["staff"])).status_code == 200
+        assert (await c.get(f"/v1/tenants/{w.tid}/orders", headers=k["viewer"])).status_code == 200
+        assert (await c.post(f"/v1/tenants/{w.tid}/config/validate", json={}, headers=k["viewer"])).status_code == 403   # any write is refused
+        assert (await c.post(f"/v1/tenants/{w.tid}/nudges/reset", headers=k["admin"])).status_code == 200
+
+
+async def test_keys_without_a_role_or_with_a_bad_one_never_get_more_than_staff(re_world):
+    w = re_world
+    key = await tenant_key(w, "legacy")                                    # no role column value => least privilege
+    async with client(container(w)) as c:
+        assert (await c.post(f"/v1/tenants/{w.tid}/nudges/reset", headers={"x-api-key": key})).status_code == 403
+        assert (await c.get(f"/v1/tenants/{w.tid}/orders", headers={"x-api-key": key})).status_code == 200
+        r = await c.post(f"/v1/platform/tenants/{w.tid}/api-keys", json={"label": "x", "role": "superuser"}, headers=P)
+        assert r.status_code == 422                                          # roles are a closed list

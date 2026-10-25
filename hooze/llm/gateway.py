@@ -30,7 +30,7 @@ class LLMUnavailable(Exception):
 class LLMProvider(Protocol):
     name: str
     async def generate(self, *, system: str, prompt: str, json_mode: bool, max_tokens: int, temperature: float) -> str: ...
-    async def embed(self, text: str, dims: int) -> list[float]: ...
+    async def embed(self, text: str, dims: int, kind: str = "query") -> list[float]: ...
 
 
 class GeminiProvider:
@@ -55,10 +55,13 @@ class GeminiProvider:
             raise ValueError("gemini returned empty response")
         return text
 
-    async def embed(self, text: str, dims: int) -> list[float]:
+    async def embed(self, text: str, dims: int, kind: str = "query") -> list[float]:
+        """kind="document" for text being INDEXED, "query" for the customer's question: Gemini embeds the two differently on purpose,
+        so indexing with the query type (what this used to do) lowers match quality."""
         from google.genai import types
+        task = "RETRIEVAL_DOCUMENT" if kind == "document" else "RETRIEVAL_QUERY"
         r = await self._c().aio.models.embed_content(model=self.embedding_model, contents=text,
-                                                     config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=dims))
+                                                     config=types.EmbedContentConfig(task_type=task, output_dimensionality=dims))
         return list(r.embeddings[0].values)
 
 
@@ -87,7 +90,7 @@ class OpenAICompatProvider:
                              f"token budget thinking before it answers: set GROQ_REASONING_EFFORT=low (or raise the token limit).")
         return text
 
-    async def embed(self, text: str, dims: int) -> list[float]:
+    async def embed(self, text: str, dims: int, kind: str = "query") -> list[float]:
         raise NotImplementedError(f"{self.name} does not provide embeddings")
 
 
@@ -125,6 +128,10 @@ class InterpretResult:
 UsageRecorder = Callable[[str, str, float, dict], Awaitable[None]]
 
 REPAIR_SUFFIX = "\n\nIMPORTANT: your previous answer was not valid JSON. Reply with ONLY the JSON object described above: no commentary, no code fences."
+
+
+INTERPRET_TOKENS = 900
+INTERPRET_RETRY_TOKENS = 1800     # the retry exists mostly for models that ran out of budget (a reasoning model "thinking" through it): same budget again fails the same way
 
 
 class LLMGateway:
@@ -197,13 +204,13 @@ class LLMGateway:
         contract), ask once more, preferring a DIFFERENT provider, with a stricter instruction. The fallback below used to go straight to
         the customer as "could you rephrase that?" - which blames the customer for a model fault ("Yes i would" was never unclear).
         """
-        text, provider = await self.generate(tenant_id, system=system, prompt=prompt, json_mode=True, max_tokens=900, purpose="interpret")
+        text, provider = await self.generate(tenant_id, system=system, prompt=prompt, json_mode=True, max_tokens=INTERPRET_TOKENS, purpose="interpret")
         parsed = parse_interpretation(text)
         if parsed is None:
             if self.events:
                 await self.events.warn("LLM_UNPARSEABLE_RESPONSE", tenant_id=tenant_id, provider=provider, raw=text[:300])
             try:
-                text2, provider2 = await self.generate(tenant_id, system=system, prompt=prompt + REPAIR_SUFFIX, json_mode=True, max_tokens=900,
+                text2, provider2 = await self.generate(tenant_id, system=system, prompt=prompt + REPAIR_SUFFIX, json_mode=True, max_tokens=INTERPRET_RETRY_TOKENS,
                                                        temperature=0.2, purpose="interpret_retry", exclude=frozenset({provider}))
                 parsed = parse_interpretation(text2)
                 if parsed is not None:
@@ -223,7 +230,7 @@ class LLMGateway:
         except LLMUnavailable:
             return ""
 
-    async def embed(self, tenant_id: str, text: str, *, fail_fast: bool = False) -> list[float]:
+    async def embed(self, tenant_id: str, text: str, *, fail_fast: bool = False, kind: str = "query") -> list[float]:
         """`fail_fast=True` (live turns) skips providers whose embedding just failed. Activation leaves it False: seeding must try
         every document rather than abort a whole sync because one call blipped."""
         last: Exception | None = None
@@ -232,7 +239,7 @@ class LLMGateway:
                 last = last or RuntimeError(f"{p.name} embedding cooling down")
                 continue
             try:
-                v = await asyncio.wait_for(p.embed(text, self.dims), self.timeout)
+                v = await asyncio.wait_for(p.embed(text, self.dims, kind), self.timeout)
                 self._clear(p, "embed")
                 await self._meter(tenant_id, "embedding", p.name, "embed", 0)
                 return v

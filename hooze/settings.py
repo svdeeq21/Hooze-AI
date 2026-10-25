@@ -37,12 +37,15 @@ class Settings(BaseSettings):
     alert_dedupe_minutes: int = 30
     maintenance_enabled: bool = True            # run the recovery/monitor loop inside this process
     channel_check_interval_seconds: int = 120
+    webhook_allow_query_token: bool = False   # legacy ?token= form puts the secret in access logs; header (x-hooze-secret) only by default
     cors_allowed_origins: str = ""   # comma-separated browser origins allowed to call the API (the dashboard). Empty = no browser access.
 
     # Storage
     media_bucket: str = "media"          # Supabase Storage bucket for uploaded menu photos/videos (created public on first upload)
     media_max_image_mb: int = 15         # per uploaded photo (before resizing)
     media_max_video_mb: int = 16         # WhatsApp's own video limit
+    media_cleanup_enabled: bool = True   # after each save, delete uploaded files no live menu item uses
+    media_orphan_min_age_hours: int = 24 # ...but only once they are this old, so an upload still being placed on a menu item is never deleted
     media_image_max_px: int = 1600       # photos are shrunk to fit this on the longest side
     supabase_url: str = ""
     supabase_service_role_key: str = ""

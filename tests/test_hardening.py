@@ -150,7 +150,7 @@ class _P:
         self.calls += 1
         if self.fail: raise RuntimeError(f"{self.name} 503")
         return '{"reply": "hi", "actions": []}'
-    async def embed(self, text, dims):
+    async def embed(self, text, dims, kind="query"):
         self.calls += 1
         if self.fail: raise RuntimeError(f"{self.name} 503")
         return [0.0] * dims
@@ -184,7 +184,7 @@ async def test_when_every_provider_is_cooling_down_we_still_try_them_rather_than
 async def test_embedding_failures_have_their_own_breaker_and_do_not_block_text_generation():
     now = [0.0]
     class EmbedDown(_P):
-        async def embed(self, text, dims): self.calls += 1; raise RuntimeError("embed quota")
+        async def embed(self, text, dims, kind="query"): self.calls += 1; raise RuntimeError("embed quota")
     g = EmbedDown("gemini")
     gw = LLMGateway([g], timeout=5, provider_cooldown=30, now=lambda: now[0])
     for _ in range(2):

@@ -98,7 +98,10 @@ async def _principal(request: Request, x_api_key: Optional[str]) -> Principal:
     row = first(await c.pdb.table("api_keys").select("*").eq("key_hash", sha256_hex(x_api_key)).limit(1).execute())
     if not row or row.get("revoked_at"):
         raise HTTPException(401, "invalid API key")
-    return Principal(kind="tenant", tenant_id=row["tenant_id"], key_id=row["id"])
+    role = row.get("role") or "staff"                       # unknown/missing => least privilege that can still work
+    if role not in ("admin", "staff", "viewer"):
+        role = "viewer"
+    return Principal(kind="tenant", tenant_id=row["tenant_id"], key_id=row["id"], role=role)
 
 
 async def require_platform(request: Request, x_api_key: Optional[str] = Header(None)) -> Principal:
@@ -112,4 +115,14 @@ async def require_tenant(tenant_id: str, request: Request, x_api_key: Optional[s
     p = await _principal(request, x_api_key)
     if p.kind == "tenant" and p.tenant_id != tenant_id:
         raise HTTPException(403, "key does not belong to this tenant")   # tenant A can never address tenant B's path
+    if p.kind == "tenant" and p.role == "viewer" and request.method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(403, "this key is read-only")
+    return p
+
+
+async def require_tenant_admin(tenant_id: str, request: Request, x_api_key: Optional[str] = Header(None)) -> Principal:
+    """Configuration, payment keys and other settings that change how the business runs: platform key or a tenant ADMIN key only."""
+    p = await require_tenant(tenant_id, request, x_api_key)
+    if p.kind == "tenant" and p.role != "admin":
+        raise HTTPException(403, "this key is not allowed to change settings (admin key required)")
     return p

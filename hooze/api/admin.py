@@ -2,16 +2,18 @@
 from __future__ import annotations
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from hooze.api.deps import get_container, require_platform, require_tenant
+from hooze.api.deps import get_container, require_platform, require_tenant, require_tenant_admin
 from hooze.capabilities.booking import BookingCapability
+from hooze.capabilities.handoff import set_ai_paused
 from hooze.config_engine.activation import activate
 from hooze.config_engine.normalize import ConfigProblem, parse_config
 from hooze.config_engine.schema import BusinessConfig
 from hooze.config_engine.validator import validate
 from hooze.kernel.db import first
+from hooze.media.cleanup import sweep_after_save
 from hooze.runtime.tenant_runtime import build_tenant_runtime
 from hooze.security import new_secret, sha256_hex
 
@@ -43,7 +45,7 @@ async def create_tenant(body: TenantIn, request: Request):
     c = get_container(request)
     t = (await c.pdb.table("tenants").insert({"slug": body.slug, "name": body.name, "status": "onboarding"}).execute()).data[0]
     key = new_secret()
-    await c.pdb.table("api_keys").insert({"tenant_id": t["id"], "key_hash": sha256_hex(key), "label": "initial"}).execute()
+    await c.pdb.table("api_keys").insert({"tenant_id": t["id"], "key_hash": sha256_hex(key), "label": "initial", "role": "staff"}).execute()
     return {"tenant": t, "api_key": key, "note": "API key is shown once."}
 
 
@@ -89,8 +91,8 @@ async def validate_config(tenant_id: str, request: Request, raw: dict = Body(...
     return out
 
 
-@router.post("/v1/tenants/{tenant_id}/config/activate", dependencies=[Depends(require_tenant)])
-async def activate_config(tenant_id: str, request: Request, raw: dict = Body(...)):
+@router.post("/v1/tenants/{tenant_id}/config/activate", dependencies=[Depends(require_tenant_admin)])
+async def activate_config(tenant_id: str, request: Request, background: BackgroundTasks, raw: dict = Body(...)):
     c = get_container(request)
     bc, _fixes = _parse_or_422(raw)
     res = await activate(c.pdb, c.llm, tenant_id, await _with_real_integration_flags(c, tenant_id, bc), configs=c.configs)
@@ -100,10 +102,11 @@ async def activate_config(tenant_id: str, request: Request, raw: dict = Body(...
         raise HTTPException(422, {"message": "configuration is not ready to go live", "report": res.report.to_dict()})
     await c.pdb.table("tenants").update({"status": "active"}).eq("id", tenant_id).execute()
     await c.events.info("TENANT_ACTIVATED", tenant_id=tenant_id, version=res.version)
+    background.add_task(sweep_after_save, c, tenant_id)          # delete uploaded files no live menu item uses any more (old enough only)
     return {"activated": True, "version": res.version, "seeded": res.seeded, "report": res.report.to_dict()}
 
 
-@router.post("/v1/tenants/{tenant_id}/integrations/paystack", dependencies=[Depends(require_tenant)])
+@router.post("/v1/tenants/{tenant_id}/integrations/paystack", dependencies=[Depends(require_tenant_admin)])
 async def connect_paystack(tenant_id: str, body: PaystackIn, request: Request):
     c = get_container(request)
     row = {"tenant_id": tenant_id, "kind": "paystack", "credentials_enc": c.vault.encrypt(body.secret_key), "config": {"email_domain": body.email_domain}, "status": "active"}
@@ -139,8 +142,11 @@ async def pause_resume(tenant_id: str, conversation_id: str, action: str, reques
     if not conv:
         raise HTTPException(404, "not found")
     paused = action == "pause"
-    await db.table("contacts").update({"ai_paused": paused}).eq("id", conv["contact_id"]).execute()
-    await db.table("conversations").update({"status": "handoff" if paused else "active"}).eq("id", conversation_id).execute()
+    try:
+        await set_ai_paused(db, conv["contact_id"], paused, conversation_id=conversation_id)
+    except Exception as e:
+        await get_container(request).events.error("HANDOFF_TOGGLE_FAILED", tenant_id=tenant_id, conversation=conversation_id, paused=paused, error=str(e)[:200])
+        raise HTTPException(500, f"Couldn't {action} this chat. Nothing was confirmed — try again.")
     return {"status": "handoff" if paused else "active"}
 
 

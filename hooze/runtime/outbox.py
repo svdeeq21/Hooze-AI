@@ -59,9 +59,20 @@ class Outbox:
         if not self.staff:
             await self.events.warn("NO_STAFF_NUMBER_CONFIGURED", tenant_id=self.tenant_id)
             return 0
+        channels = (await self.pdb.table("channels").select("*").eq("tenant_id", self.tenant_id).eq("status", "active").order("created_at").execute()).data or []
         for phone in self.staff:
-            try:
-                n += 1 if await self.send(phone, text, record=False) else 0   # staff alerts never go into a customer transcript
-            except Exception as e:
-                await self.events.error("STAFF_ALERT_FAILED", tenant_id=self.tenant_id, error=str(e)[:160])
+            # A client can have several numbers. Alerts used to go out through whichever came back first, so one disconnected/banned number
+            # silently swallowed every alert. Try each active number in a stable order until one delivers.
+            sent, last = False, ""
+            for ch in channels:
+                try:
+                    await self.adapters.for_channel(ch).send_text(phone, text, typing_delay=0.0)   # staff alerts never go into a customer transcript
+                    sent = True
+                    break
+                except Exception as e:
+                    last = f"{ch.get('instance_name')}: {str(e)[:120]}"
+            if sent:
+                n += 1
+            else:
+                await self.events.error("STAFF_ALERT_FAILED", tenant_id=self.tenant_id, error=last or "no active channel", tried=len(channels))
         return n

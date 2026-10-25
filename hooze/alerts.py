@@ -50,6 +50,8 @@ RULES: list[Rule] = [
        "A payment needs your attention", "Money may have been taken without the order updating. Open the client's Orders and the Paystack dashboard and match the reference.", window_s=300),
     _r("late_payment", "PAYMENT_AFTER_EXPIRED PAYMENT_AFTER_CANCELLED", "A customer paid after their checkout expired or was cancelled",
        "The order was marked paid and the business was told. Confirm it can be fulfilled, otherwise refund in Paystack.", window_s=300, icon="🟠"),
+    _r("double_payment", "PAYMENT_DOUBLE_PAYMENT", "A customer paid twice for the same order",
+       "The order is already marked paid and the business was told. Refund the second payment in Paystack (match the reference).", window_s=300, icon="🟠"),
     _r("staff_alert_failed", "STAFF_ALERT_FAILED", "The business owner could not be notified",
        "New bookings/orders are not reaching them. Check the staff phone number under the client's Setup and that WhatsApp is connected.", window_s=1800),
     _r("no_config", "NO_ACTIVE_CONFIG", "A client has no live setup, so their customers are being ignored",

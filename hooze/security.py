@@ -35,6 +35,7 @@ class Principal:
     kind: str                 # "platform" | "tenant"
     tenant_id: Optional[str] = None
     key_id: Optional[str] = None   # which key acted -> per-person attribution (audit enhancement)
+    role: str = "admin"            # tenant keys: admin | staff | viewer. The platform principal is always full access.
 
 
 class Vault:

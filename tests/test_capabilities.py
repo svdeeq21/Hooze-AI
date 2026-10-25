@@ -185,14 +185,26 @@ async def _fresh(w):
     return w.cap("nudges", await w.configs.load_active(w.tid))
 
 
-async def test_dry_run_is_the_default_it_sends_nothing_but_advances_and_logs(re_world):
+async def test_dry_run_is_the_default_it_sends_nothing_logs_and_does_not_advance_the_sequence(re_world):
     w = re_world
     await idle_discovery(w)
     n = len(w.replies())
     w.clock.advance(hours=25)
     r = await tick(w)
     assert r["dry_run"] == 1 and r["sent"] == 0 and len(w.replies()) == n
-    assert nstate(w)["step"] == 1 and "Hi Ada" in w.sink.find("NUDGE_DRY_RUN_WOULD_SEND")[0]["metadata"]["preview"]
+    assert nstate(w)["step"] == 0 and "Hi Ada" in w.sink.find("NUDGE_DRY_RUN_WOULD_SEND")[0]["metadata"]["preview"]
+    assert (await tick(w))["dry_run"] == 0                                    # the cooldown stamp stops it logging the same preview every tick
+
+
+async def test_going_live_after_a_dry_run_starts_from_the_first_message_without_any_reset(re_world):
+    w = re_world
+    await idle_discovery(w)
+    w.clock.advance(hours=25); await tick(w); w.clock.advance(hours=25); await tick(w); w.clock.advance(hours=25); await tick(w)   # three dry cycles
+    set_nudge_cfg(w, dry_run=False)
+    w.clock.advance(hours=25)
+    r = await tick(w)
+    assert r["sent"] == 1 and nstate(w)["step"] == 1
+    assert "Hi Ada" in w.last_reply()                                           # the FIRST template, not the third
 
 
 async def test_live_nudge_sends_records_and_respects_cooldown_then_exhausts(re_world):

@@ -14,7 +14,7 @@ import httpx
 
 from hooze.settings import get_settings
 
-_local_locks: dict[str, asyncio.Lock] = {}
+_local_locks: dict[str, list] = {}          # key -> [Lock, users]; an entry exists only while someone holds or waits for it
 _local_cache: dict[str, tuple[float, str]] = {}
 
 
@@ -38,8 +38,14 @@ class distributed_lock:
 
     async def __aenter__(self):
         if _redis_cfg() is None:
-            self._local = _local_locks.setdefault(self.key, asyncio.Lock())
-            await self._local.acquire()
+            entry = _local_locks.setdefault(self.key, [asyncio.Lock(), 0])
+            entry[1] += 1                                   # count waiters BEFORE awaiting so the entry cannot be dropped under them
+            self._local = entry
+            try:
+                await entry[0].acquire()
+            except BaseException:                           # cancelled while waiting: give the slot back and clean up
+                self._release_entry()
+                raise
             return self
         deadline = time.monotonic() + self.max_wait
         while time.monotonic() < deadline:
@@ -52,9 +58,16 @@ class distributed_lock:
             await asyncio.sleep(0.15)
         return self  # timeout: proceed; DB constraints backstop
 
+    def _release_entry(self) -> None:
+        entry = self._local
+        entry[1] -= 1
+        if entry[1] <= 0 and _local_locks.get(self.key) is entry:
+            del _local_locks[self.key]                      # nobody holds or awaits it: forget it (it used to live forever, one per tenant:phone)
+
     async def __aexit__(self, *exc):
         if self._local is not None:
-            self._local.release()
+            self._local[0].release()
+            self._release_entry()
         elif self._via_redis:
             try:
                 await _redis("EVAL", "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end", "1", self.key, self.token)

@@ -59,7 +59,9 @@ def test_size_limits_are_enforced_per_kind_with_the_real_numbers():
 # ── endpoint ───────────────────────────────────────────────────────────
 async def _tenant(c, slug):
     t = (await c.post("/v1/platform/tenants", json={"slug": slug, "name": slug}, headers={"x-api-key": PLATFORM})).json()
-    return t["tenant"]["id"], {"x-api-key": t["api_key"]}
+    tid = t["tenant"]["id"]
+    admin = (await c.post(f"/v1/platform/tenants/{tid}/api-keys", json={"label": "admin", "role": "admin"}, headers={"x-api-key": PLATFORM})).json()
+    return tid, {"x-api-key": admin["api_key"]}
 
 
 async def test_upload_returns_a_public_link_in_the_clients_own_folder_and_isolates_tenants():
@@ -121,3 +123,34 @@ async def test_supabase_storage_tolerates_an_existing_bucket_and_reports_real_fa
     st = SupabaseMediaStorage("https://abc.supabase.co", "k", transport=httpx.MockTransport(handler))
     with pytest.raises(MediaStorageError, match="403"):
         await st.put("t/a.jpg", b"x", "image/jpeg")
+
+
+async def test_supabase_storage_lists_a_tenant_folder_with_paging_skips_subfolders_and_deletes_by_exact_path():
+    import json as _json
+    calls = []
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else {}
+        calls.append((req.method, req.url.path, body))
+        if req.url.path.endswith("/object/list/media"):
+            if body["offset"] == 0:                                                            # a full first page forces a second request
+                return httpx.Response(200, json=[{"name": f"f{i}.jpg", "id": f"id{i}", "created_at": "2026-01-01T00:00:00Z"} for i in range(1000)])
+            return httpx.Response(200, json=[{"name": "last.jpg", "id": "x", "created_at": "2026-01-02T00:00:00Z"}, {"name": "subfolder", "id": None}])
+        return httpx.Response(200, json=[{"name": p} for p in body.get("prefixes", [])])
+    st = SupabaseMediaStorage("https://abc.supabase.co", "sb_secret_xyz", "media", transport=httpx.MockTransport(handler))
+    files = await st.list_files("tenant-1")
+    assert len(files) == 1001 and files[0]["path"] == "tenant-1/f0.jpg" and files[-1] == {"path": "tenant-1/last.jpg", "created_at": "2026-01-02T00:00:00Z"}
+    assert [c[2]["offset"] for c in calls] == [0, 1000] and all(c[2]["prefix"] == "tenant-1" for c in calls)
+    calls.clear()
+    assert await st.delete([f"tenant-1/f{i}.jpg" for i in range(150)]) == 150
+    assert [(m, len(b["prefixes"])) for m, _, b in calls] == [("DELETE", 100), ("DELETE", 50)]          # batched; exact paths only
+    assert await st.delete([]) == 0 and len(calls) == 2
+
+
+async def test_supabase_storage_list_and_delete_report_real_failures_and_a_missing_bucket_means_no_files():
+    st = SupabaseMediaStorage("https://abc.supabase.co", "k", transport=httpx.MockTransport(lambda r: httpx.Response(404, text="Bucket not found")))
+    assert await st.list_files("t") == []
+    bad = SupabaseMediaStorage("https://abc.supabase.co", "k", transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boom")))
+    with pytest.raises(MediaStorageError, match="500"):
+        await bad.list_files("t")
+    with pytest.raises(MediaStorageError, match="500"):
+        await bad.delete(["t/a.jpg"])

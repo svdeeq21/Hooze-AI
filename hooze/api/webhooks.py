@@ -30,7 +30,14 @@ async def whatsapp_webhook(channel_id: str, request: Request, background: Backgr
     except Exception:
         raise HTTPException(400, "invalid JSON")
     adapter = c.adapters.for_channel(channel)
-    provided = request.headers.get("x-hooze-secret") or token
+    provided = request.headers.get("x-hooze-secret")
+    if not provided and token:
+        if getattr(c.settings, "webhook_allow_query_token", False):
+            provided = token
+        else:
+            # The secret in a URL lands in proxy/access logs. Say exactly why this was refused, so a hand-configured number is easy to fix.
+            await c.events.warn("WEBHOOK_QUERY_TOKEN_REJECTED", tenant_id=channel["tenant_id"], channel_id=channel_id,
+                                hint="send the secret in the x-hooze-secret header (re-provision/rotate the webhook from the dashboard)")
     if not adapter.verify(provided_secret=provided, body=body, channel=channel):
         await c.events.warn("WEBHOOK_AUTH_FAILED", tenant_id=channel["tenant_id"], channel_id=channel_id, ip=request.client.host if request.client else None)
         raise HTTPException(401, "unauthorized")

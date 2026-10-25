@@ -31,6 +31,9 @@ CLAIM_PATTERNS = [r"\b(sending|sent|attached|attaching)\b.*\b(details|listing|ph
                   r"\bhere (is|are)\b.*\b(details|listing|photos?|link)\b"]
 
 
+EMBED_RECIPE = "document-embeddings-v2"      # v1 = documents were embedded as search queries
+
+
 @dataclass
 class KnowledgeDoc:
     external_id: str
@@ -42,7 +45,9 @@ class KnowledgeDoc:
     is_active: bool = True
 
     def content_hash(self) -> str:
-        return hashlib.sha256(json.dumps([self.title, self.content, self.kind, self.data, self.media, self.is_active], sort_keys=True, default=str).encode()).hexdigest()
+        # EMBED_RECIPE is part of the hash on purpose: changing how documents are embedded makes every stored vector stale, and a hash that
+        # ignored it would skip them as "unchanged" forever. Bump it and the next activation re-embeds everything once.
+        return hashlib.sha256(json.dumps([EMBED_RECIPE, self.title, self.content, self.kind, self.data, self.media, self.is_active], sort_keys=True, default=str).encode()).hexdigest()
 
 
 async def sync_documents(db, embedder, docs: list[KnowledgeDoc], *, source: str, concurrency: int = 4) -> dict:

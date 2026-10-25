@@ -105,7 +105,10 @@ class NudgesCapability(Capability):
             message = st.nudges[step].format_map(slots)
             if dry:
                 await self.ctx.events.info("NUDGE_DRY_RUN_WOULD_SEND", tenant_id=self.ctx.tenant_id, state=st.name, step=step, preview=message[:120])
-                await self.ctx.db.table("nudge_state").update({"step": step + 1, "last_nudge_at": now.isoformat(), "status": "IDLE"}).eq("id", ns["id"]).execute()
+                # A dry run must leave NO trace a live run depends on. It used to advance `step`, so switching to live skipped the early
+                # messages for every conversation unless someone remembered to reset first. Only the cooldown stamp is written, so the
+                # preview is logged once per idle period instead of on every tick.
+                await self.ctx.db.table("nudge_state").update({"last_nudge_at": now.isoformat()}).eq("id", ns["id"]).execute()
                 summary["dry_run"] += 1
                 continue
             # RESERVE BEFORE SEND — a failure here can cost a send, never cause a resend loop

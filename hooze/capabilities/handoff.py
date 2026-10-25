@@ -31,6 +31,26 @@ DEFAULT_HUMAN_PATTERNS = [
 ]
 
 
+
+async def set_ai_paused(db, contact_id: str, paused: bool, *, conversation_id: Optional[str] = None) -> None:
+    """Pause/resume the assistant for a contact. Two rows hold this state (`contacts.ai_paused` and `conversations.status`); they cannot be
+    one transaction here. The pipeline treats a customer as paused if EITHER says so, so a half-done change is never a customer who is
+    "resumed" but unanswered by accident: it is simply still paused. What goes wrong is the HUMAN being misled, so:
+      * the writes are ordered so the contact flag (what the dashboard shows as "AI paused") only turns off LAST on resume and on FIRST
+        on pause, i.e. after a failure the dashboard never shows "resumed" for a chat that is still silenced;
+      * the caller must treat an exception as "not done" and say so (both callers do); repeating the call is safe (idempotent)."""
+    status = {"status": "handoff" if paused else "active"}
+    def conv():
+        q = db.table("conversations").update(status)
+        return q.eq("id", conversation_id) if conversation_id else q.eq("contact_id", contact_id)
+    if paused:
+        await db.table("contacts").update({"ai_paused": True}).eq("id", contact_id).execute()
+        await conv().execute()
+    else:
+        await conv().execute()
+        await db.table("contacts").update({"ai_paused": False}).eq("id", contact_id).execute()
+
+
 class _NoArgs(BaseModel):
     reason: str = ""
 
@@ -83,8 +103,11 @@ class HandoffCapability(Capability):
             row = first(await self.ctx.db.table("contacts").select("*").eq("phone", phone).limit(1).execute())
             if not row:
                 return f"No contact found for {phone}."
-            await self.ctx.db.table("contacts").update({"ai_paused": paused}).eq("id", row["id"]).execute()
-            await self.ctx.db.table("conversations").update({"status": "handoff" if paused else "active"}).eq("contact_id", row["id"]).execute()
+            try:
+                await set_ai_paused(self.ctx.db, row["id"], paused)
+            except Exception as e:
+                await self.ctx.events.error("HANDOFF_TOGGLE_FAILED", tenant_id=self.ctx.tenant_id, contact=phone[:6] + "****", paused=paused, error=str(e)[:200])
+                return f"⚠️ I couldn't {'pause' if paused else 'resume'} the assistant for {phone} — nothing was confirmed. Please send the same message again."
             await self.ctx.events.info("HANDOFF_PAUSED" if paused else "HANDOFF_RESUMED", tenant_id=self.ctx.tenant_id, actor=actor[:6] + "****", contact=phone[:6] + "****")
             return f"{'Paused' if paused else 'Resumed'} the assistant for {phone}."
 

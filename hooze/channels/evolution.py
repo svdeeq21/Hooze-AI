@@ -56,6 +56,10 @@ def _phone_from_jid(jid: str) -> str:
     return "".join(ch for ch in jid.split("@")[0] if ch.isdigit())
 
 
+class _RateLimited(RuntimeError):
+    """HTTP 429 from Evolution: the request was refused, nothing was sent, so retrying is safe."""
+
+
 class EvolutionAdapter:
     kind = "whatsapp_evolution"
 
@@ -90,11 +94,16 @@ class EvolutionAdapter:
     def _headers(self) -> dict:
         return {"apikey": self.api_key, "Content-Type": "application/json"}
 
-    @with_retry(max_attempts=3, base_delay=2.0)
+    @with_retry(max_attempts=3, base_delay=2.0, exceptions=(httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, _RateLimited))
     async def _post(self, path: str, payload: dict, timeout: float = 15.0) -> dict:
-        """The pure network call — the ONLY thing that is retried (audit H3)."""
+        """The pure network call — the ONLY thing that is retried (audit H3), and only when the request PROVABLY did not go through:
+        we could not connect (nothing was sent) or Evolution said "slow down" (429). A read timeout or a 5xx is AMBIGUOUS — Evolution may
+        already have accepted and sent the message — so it is raised as is and never re-sent (re-sending produced duplicate WhatsApp messages).
+        The inbound queue handles a failed turn separately, with its own replay guard."""
         async with self._http(timeout) as c:
             r = await c.post(f"{self.base_url}{path}/{self.instance}", json=payload, headers=self._headers())
+        if r.status_code == 429:
+            raise _RateLimited(f"Evolution {path} 429: {r.text[:200]}")
         if r.status_code not in (200, 201):
             raise RuntimeError(f"Evolution {path} {r.status_code}: {r.text[:200]}")
         return r.json() if r.content else {}

@@ -181,7 +181,7 @@ async def test_checkout_charges_food_only_in_kobo_and_sends_the_link(food_world)
     o = order(w)[0]
     assert o["status"] == "PAYMENT_PENDING" and o["subtotal_minor"] == 9_000_00
     (p,) = w.db.rows("payments")
-    assert p["amount_minor"] == 9_000_00 and p["reference"] == f"{w.tid[:8]}_{o['id']}" and p["status"] == "pending"
+    assert p["amount_minor"] == 9_000_00 and p["reference"].startswith(f"{w.tid[:8]}_{o['id']}_") and p["status"] == "pending"
     reply = w.last_reply()
     assert "₦9,000" in reply and p["authorization_url"] in reply and "food only" in reply and "Here you go" not in reply   # override wins
     assert w.db.rows("conversations")[0]["state"] == "CHECKOUT"
