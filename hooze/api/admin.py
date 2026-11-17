@@ -52,6 +52,8 @@ async def create_tenant(body: TenantIn, request: Request):
 @router.post("/v1/platform/tenants/{tenant_id}/channels", dependencies=[Depends(require_platform)])
 async def create_channel(tenant_id: str, body: ChannelIn, request: Request):
     c = get_container(request)
+    if not first(await c.pdb.table("tenants").select("id").eq("id", tenant_id).limit(1).execute()):
+        raise HTTPException(404, "tenant not found")        # a bad id used to surface as a 500 (FK violation), not a 404
     secret = new_secret()
     ch = (await c.pdb.table("channels").insert({
         "tenant_id": tenant_id, "kind": body.kind, "instance_name": body.instance_name, "config": {"base_url": body.base_url},
@@ -81,6 +83,51 @@ def _parse_or_422(raw: dict) -> tuple[BusinessConfig, list[str]]:
         raise HTTPException(422, {"message": "The configuration is not valid: " + "; ".join(e.problems), "problems": e.problems})
 
 
+# ── drafts: save setup work WITHOUT going live ──────────────────
+# Onboarding used to have exactly one save button: "Go live" — which is blocked until WhatsApp (and, for order
+# tenants, Paystack) is connected. So a half-finished setup lived only in the operator's browser tab and died with it.
+# A draft is a tenant_configs row with status='draft' and version=0 (never a version activation can produce, which
+# starts at 1), updated in place. Saving a draft requires nothing to be connected; going live still requires everything.
+
+DRAFT_VERSION = 0
+
+
+async def _draft_row(db) -> Optional[dict]:
+    return first(await db.table("tenant_configs").select("*").eq("status", "draft").limit(1).execute())
+
+
+def _draft_view(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    return {"config": row["config"], "saved_at": row.get("updated_at") or row.get("created_at"), "validation_report": row.get("validation_report")}
+
+
+@router.put("/v1/tenants/{tenant_id}/config/draft", dependencies=[Depends(require_tenant)])
+async def save_draft(tenant_id: str, request: Request, raw: dict = Body(...)):
+    """Save setup progress. Deliberately NOT gated on readiness: an incomplete config is exactly what a draft is for.
+    The current readiness report is stored alongside it so the UI (or an AI interview) can show what is still missing."""
+    c = get_container(request)
+    bc, fixes = _parse_or_422(raw)
+    report = validate(await _with_real_integration_flags(c, tenant_id, bc)).to_dict()
+    db = c.pdb.for_tenant(tenant_id)
+    fields = {"config": bc.model_dump(mode="json"), "validation_report": report, "updated_at": c.clock().isoformat()}
+    existing = await _draft_row(db)
+    if existing:
+        await db.table("tenant_configs").update(fields).eq("id", existing["id"]).execute()
+    else:
+        await db.table("tenant_configs").insert({**fields, "version": DRAFT_VERSION, "status": "draft", "compiled": {}}).execute()
+    out = {"saved": True, "saved_at": fields["updated_at"], "report": report}
+    if fixes:
+        out["normalized"] = fixes
+    return out
+
+
+@router.delete("/v1/tenants/{tenant_id}/config/draft", dependencies=[Depends(require_tenant)])
+async def discard_draft(tenant_id: str, request: Request):
+    rows = (await get_container(request).pdb.for_tenant(tenant_id).table("tenant_configs").delete().eq("status", "draft").execute()).data
+    return {"discarded": bool(rows)}
+
+
 @router.post("/v1/tenants/{tenant_id}/config/validate", dependencies=[Depends(require_tenant)])
 async def validate_config(tenant_id: str, request: Request, raw: dict = Body(...)):
     c = get_container(request)
@@ -101,6 +148,10 @@ async def activate_config(tenant_id: str, request: Request, background: Backgrou
             raise HTTPException(503, {"message": res.error, "retryable": True, "seeded": res.seeded})     # a dependency failed, not the config
         raise HTTPException(422, {"message": "configuration is not ready to go live", "report": res.report.to_dict()})
     await c.pdb.table("tenants").update({"status": "active"}).eq("id", tenant_id).execute()
+    try:        # the draft just became the live version; a leftover draft would shadow it on the next Setup load
+        await c.pdb.for_tenant(tenant_id).table("tenant_configs").delete().eq("status", "draft").execute()
+    except Exception as e:
+        await c.events.warn("DRAFT_CLEANUP_FAILED", tenant_id=tenant_id, error=str(e)[:160])
     await c.events.info("TENANT_ACTIVATED", tenant_id=tenant_id, version=res.version)
     background.add_task(sweep_after_save, c, tenant_id)          # delete uploaded files no live menu item uses any more (old enough only)
     return {"activated": True, "version": res.version, "seeded": res.seeded, "report": res.report.to_dict()}

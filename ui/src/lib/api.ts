@@ -39,6 +39,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 const get = <T,>(p: string) => req<T>("GET", p);
 const post = <T,>(p: string, b: unknown = {}) => req<T>("POST", p, b);
+const put = <T,>(p: string, b: unknown) => req<T>("PUT", p, b);
 const patch = <T,>(p: string, b: unknown) => req<T>("PATCH", p, b);
 const del = <T,>(p: string) => req<T>("DELETE", p);
 
@@ -58,6 +59,8 @@ export interface Integration { id: string; kind: string; status: string; payment
 export interface Issue { code: string; message: string; field: string }
 export interface Report { ok: boolean; completeness: number; blocking: Issue[]; warnings: Issue[] }
 export interface ActiveConfig { version: number; activated_at: string | null; config: BusinessConfig; validation_report: Report | null }
+export interface DraftConfig { config: BusinessConfig; saved_at: string | null; validation_report: Report | null }
+export interface ConfigState { active: ActiveConfig | null; draft: DraftConfig | null }
 export interface TenantDetail { tenant: Tenant; channels: Channel[]; api_keys: ApiKeyRow[]; integrations: Integration[]; active_config: ActiveConfig | null }
 export interface EventRow { id?: string; severity: string; event: string; tenant_id: string | null; metadata: Record<string, unknown>; created_at: string }
 export interface LlmProvider { name: string; model: string | null; cooling_generate_s: number; cooling_embed_s: number }
@@ -138,7 +141,9 @@ export const api = {
     const p = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));
     return get<{ events: EventRow[] }>(`/v1/platform/events?${p}`).then((r) => r.events);
   },
-  config: (id: string) => get<{ active: ActiveConfig | null }>(`${T(id)}/config`).then((r) => r.active),
+  config: (id: string) => get<ConfigState>(`${T(id)}/config`),
+  saveDraft: (id: string, bc: BusinessConfig) => put<{ saved: boolean; saved_at: string; report: Report }>(`${T(id)}/config/draft`, bc),
+  discardDraft: (id: string) => del<{ discarded: boolean }>(`${T(id)}/config/draft`),
   validate: (id: string, bc: BusinessConfig) => post<Report>(`${T(id)}/config/validate`, bc),
   activate: (id: string, bc: BusinessConfig) => post<{ activated: boolean; version: number; seeded: Record<string, number>; report: Report }>(`${T(id)}/config/activate`, bc),
   stats: (id: string) => get<Stats>(`${T(id)}/stats`),

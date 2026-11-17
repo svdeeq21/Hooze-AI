@@ -34,6 +34,20 @@ _KIND_BY_KEY = {
 }
 
 
+# WhatsApp wraps the real message for disappearing-messages chats and view-once media. Very common on WhatsApp
+# Business — before this, text inside an ephemeral chat parsed as kind="other" and got "Sorry, I didn't quite catch that".
+_WRAPPER_KEYS = ("ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension", "documentWithCaptionMessage")
+
+
+def _unwrap(message: dict) -> dict:
+    for _ in range(3):                                     # wrappers can nest (viewOnce inside ephemeral); never loop on bad input
+        inner = next((message[k].get("message") for k in _WRAPPER_KEYS if isinstance(message.get(k), dict)), None)
+        if not isinstance(inner, dict):
+            return message
+        message = inner
+    return message
+
+
 def _extract_text(message: dict) -> str:
     """Plain text first, then interactive replies (a tap == the same words typed)."""
     if "conversation" in message:
@@ -49,6 +63,11 @@ def _extract_text(message: dict) -> str:
     if "templateButtonReplyMessage" in message:
         r = message["templateButtonReplyMessage"]
         return r.get("selectedDisplayText") or r.get("selectedId", "")
+    for k in ("imageMessage", "videoMessage", "documentMessage"):
+        # A photo sent WITH a caption ("how much is this one?") used to lose the caption entirely: the bot answered
+        # "I can't view images here" and ignored the question the customer actually typed.
+        if isinstance(message.get(k), dict):
+            return message[k].get("caption") or ""
     return ""
 
 
@@ -81,9 +100,12 @@ class EvolutionAdapter:
         if not key or not mtype:
             return None
         jid = key.get("remoteJid", "")
-        message = data.get("message") or {}
+        message = _unwrap(data.get("message") or {})
         text = _extract_text(message)
-        kind = "text" if text else next((v for k, v in _KIND_BY_KEY.items() if k in message or k == mtype), "other")
+        # A captioned photo keeps kind="image" (so the transcript records what arrived) but carries the caption as its
+        # text, so the pipeline answers the words instead of sending the canned "I can't view images" reply.
+        media_kind = next((v for k, v in _KIND_BY_KEY.items() if k in message or k == mtype), None)
+        kind = media_kind or ("text" if text else "other")
         return InboundMessage(
             provider_message_id=key.get("id"), phone=_phone_from_jid(jid), text=text, kind=kind,
             push_name=data.get("pushName"), from_me=bool(key.get("fromMe")), is_group="@g.us" in jid,

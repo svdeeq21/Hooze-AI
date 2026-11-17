@@ -175,7 +175,7 @@ class Pipeline:
         if contact.get("ai_paused") or conv.get("status") == "handoff":
             return TurnOutcome("paused")                 # a human owns this conversation; message is stored
 
-        if content_type != "text" or not text:           # media we can't interpret
+        if not text:                                     # media with no words we can use (a captioned photo DOES carry words: it flows on to the LLM as text)
             replies = {**DEFAULT_MEDIA_REPLIES, **cfg.media_replies}
             canned = replies.get(inbound.kind, replies["other"])
             if canned:

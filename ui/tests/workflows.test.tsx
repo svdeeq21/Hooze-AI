@@ -171,7 +171,7 @@ describe("property client: bookings, setup", () => {
     expect(await screen.findByText(/ready to go live/i)).toBeInTheDocument();
     await user.click(screen.getAllByRole("button", { name: /go live/i })[0]);
     expect(await screen.findByText(/Live! Version 2/i)).toBeInTheDocument();
-    const live = await api.config(t.id);
+    const live = (await api.config(t.id)).active;
     expect(live?.version).toBe(2);
     expect(live?.config.identity.name).toBe("Praise Dynasty Properties");
     expect(live?.config.offerings.length).toBeGreaterThan(0);                   // the form didn't drop their listings
@@ -183,7 +183,23 @@ describe("property client: bookings, setup", () => {
     await user.click((await screen.findAllByRole("button", { name: /go live/i }))[0]);
     expect(await screen.findByText(/not ready yet/i)).toBeInTheDocument();
     expect(await screen.findByText(/must fix/i)).toBeInTheDocument();
-    expect((await api.config(t.id))).toBeNull();
+    expect((await api.config(t.id)).active).toBeNull();
+  });
+  it("saves setup as a draft before WhatsApp is connected, loads it back after a reload, and can discard it", async () => {
+    const t = await tenantByName("Lagos Lashes");
+    const user = userEvent.setup();
+    await open(t.id, "setup");
+    const desc = await screen.findByLabelText(/short description/i);
+    await user.type(desc, "Lash studio in Lekki");
+    await screen.findByText(/draft saved/i, undefined, { timeout: 6000 });                    // the quiet autosave reached the API
+    expect((await api.config(t.id)).draft?.config.identity.description).toBe("Lash studio in Lekki");
+    expect((await api.config(t.id)).active).toBeNull();                                       // still not live: saving never needs WhatsApp
+    cleanup();
+    await open(t.id, "setup");                                                                // "reload": a fresh mount pulls the draft back
+    expect(await screen.findByDisplayValue("Lash studio in Lekki")).toBeInTheDocument();
+    expect(await screen.findByText("draft")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /discard draft/i }));
+    await waitFor(async () => expect((await api.config(t.id)).draft).toBeNull());
   });
 });
 
@@ -210,7 +226,7 @@ describe("whatsapp and settings", () => {
     await user.clear(box);
     await user.type(box, "08012345678");
     await user.click(screen.getAllByRole("button", { name: /go live/i })[0]);
-    await waitFor(async () => expect((await api.config(t.id))?.config.handoff.staff_phones).toEqual(["2348012345678"]));
+    await waitFor(async () => expect((await api.config(t.id)).active?.config.handoff.staff_phones).toEqual(["2348012345678"]));
   });
   it("creates and revokes a client key, and resets follow-up progress", async () => {
     const t = await tenantByName("Praise Dynasty Properties");

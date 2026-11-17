@@ -397,11 +397,11 @@ async def reconnect_webhook(tenant_id: str, channel_id: str, body: WebhookIn, re
 # ═══════════════════════ tenant: config, stats, conversations ═══════════════════════
 @router.get("/v1/tenants/{tenant_id}/config", dependencies=[Depends(require_tenant)])
 async def get_config(tenant_id: str, request: Request):
+    from hooze.api.admin import _draft_row, _draft_view            # lazy: admin imports operator helpers too
     db = get_container(request).pdb.for_tenant(tenant_id)
     cfg = first(await db.table("tenant_configs").select("*").eq("status", "active").limit(1).execute())
-    if not cfg:
-        return {"active": None}
-    return {"active": {"version": cfg["version"], "activated_at": cfg.get("activated_at"), "config": cfg["config"], "validation_report": cfg.get("validation_report")}}
+    active = {"version": cfg["version"], "activated_at": cfg.get("activated_at"), "config": cfg["config"], "validation_report": cfg.get("validation_report")} if cfg else None
+    return {"active": active, "draft": _draft_view(await _draft_row(db))}
 
 
 @router.get("/v1/tenants/{tenant_id}/stats", dependencies=[Depends(require_tenant)])

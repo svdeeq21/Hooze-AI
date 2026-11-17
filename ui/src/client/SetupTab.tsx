@@ -13,12 +13,26 @@ const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const merge = (c: unknown): BusinessConfig => normalizeConfig(c).config;
 
 export default function SetupTab({ id, detail, go }: { id: string; detail: TenantDetail; go: (tab: string) => void }) {
+  const [epoch, setEpoch] = useState(0);        // bumped when a draft is discarded, so the form reloads from the live version
   const q = useQuery({ queryKey: ["config", id], queryFn: () => api.config(id) });
   if (q.isLoading) return <Loading />;
-  return <Form key={q.data?.version ?? 0} go={go} id={id} initial={q.data ? merge(q.data.config) : emptyConfig()} version={q.data?.version ?? null} name={detail.tenant.name} />;
+  const active = q.data?.active ?? null;
+  const draft = q.data?.draft ?? null;          // unfinished setup work beats the live version: that's what the person was doing
+  const src = draft?.config ?? active?.config ?? null;
+  return <Form key={`${active?.version ?? 0}:${epoch}`} go={go} id={id} initial={src ? merge(src) : emptyConfig()} version={active?.version ?? null}
+    fromDraft={!!draft} draftSavedAt={draft?.saved_at ?? null} onDraftDiscarded={() => setEpoch((e) => e + 1)} name={detail.tenant.name} />;
 }
 
-function Form({ id, initial, version, name, go }: { id: string; initial: BusinessConfig; version: number | null; name: string; go: (tab: string) => void }) {
+// The goal-derived fields the form normalises on mount — applied here too, so an untouched form is never "different"
+// from what was loaded (which would save a draft just for opening the tab).
+const canon = (c: BusinessConfig): string => {
+  const n = structuredClone(c);
+  n.integrations.payments = n.sales_process.goal === "order" ? "paystack" : null;
+  if (n.sales_process.goal === "consult_and_book") n.booking.enabled = true;
+  return JSON.stringify(n);
+};
+
+function Form({ id, initial, version, name, go, fromDraft, draftSavedAt, onDraftDiscarded }: { id: string; initial: BusinessConfig; version: number | null; name: string; go: (tab: string) => void; fromDraft: boolean; draftSavedAt: string | null; onDraftDiscarded: () => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [cfg, setCfg] = useState<BusinessConfig>(() => ({ ...initial, identity: { ...initial.identity, name: initial.identity.name || name } }));
@@ -29,6 +43,8 @@ function Form({ id, initial, version, name, go }: { id: string; initial: Busines
   const [fixes, setFixes] = useState<string[]>([]);       // what the normalizer repaired in the last paste
   const set = (fn: (c: BusinessConfig) => void) => setCfg((c) => { const n = structuredClone(c); fn(n); return n; });
   const [bulk, setBulk] = useState(false);
+  const lastSaved = useRef<string | null>(null);
+  const [draftInfo, setDraftInfo] = useState<{ isDraft: boolean; at: string | null; saving: boolean }>({ isDraft: fromDraft, at: draftSavedAt, saving: false });
   // Applies to the LATEST draft (functional update), so several uploads finishing at once can't overwrite each other.
   const addMedia = (i: number, urls: string[]) => set((c) => { const t = c.offerings[i]; if (t) t.media.push(...urls.filter((u) => !t.media.includes(u))); });
   const goal = cfg.sales_process.goal;
@@ -37,6 +53,26 @@ function Form({ id, initial, version, name, go }: { id: string; initial: Busines
   useEffect(() => {
     set((c) => { c.integrations.payments = c.sales_process.goal === "order" ? "paystack" : null; if (c.sales_process.goal === "consult_and_book") c.booking.enabled = true; });
   }, [goal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── drafts: every edit is saved quietly after a pause, so closing the tab never loses setup work ──
+  // Saving needs NOTHING connected (no WhatsApp, no Paystack); only "Go live" is gated on readiness.
+  useEffect(() => {
+    const s = canon(cfg);
+    if (lastSaved.current === null) { lastSaved.current = s; return; }     // mount + the goal-normalisation pass: nothing the person typed yet
+    if (s === lastSaved.current) return;
+    const t = setTimeout(() => {
+      setDraftInfo((d) => ({ ...d, saving: true }));
+      api.saveDraft(id, cfg)
+        .then((r) => { lastSaved.current = s; setDraftInfo({ isDraft: true, at: r.saved_at, saving: false }); })
+        .catch(() => setDraftInfo((d) => ({ ...d, saving: false })));      // quiet: retried on the next edit; "Go live" reports real errors
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [cfg, id]);
+  const discard = useMutation({
+    mutationFn: () => api.discardDraft(id),
+    onSuccess: () => { toast("ok", version ? "Draft discarded — back to the live version." : "Draft discarded."); qc.invalidateQueries({ queryKey: ["config", id] }); onDraftDiscarded(); },
+    onError: (e) => toast("bad", errMsg(e)),
+  });
 
   // ── live readiness: re-check quietly while the person edits, so problems are highlighted where they are ──
   const checkSeq = useRef(0);
@@ -60,7 +96,11 @@ function Form({ id, initial, version, name, go }: { id: string; initial: Busines
   const check = useMutation({ mutationFn: () => api.validate(id, cfg), onSuccess: setReport, onError: (e) => toast("bad", errMsg(e)) });
   const live = useMutation({
     mutationFn: () => api.activate(id, cfg),
-    onSuccess: (r) => { setReport(r.report); toast("ok", `Live! Version ${r.version} is now answering customers.`); qc.invalidateQueries(); },
+    onSuccess: (r) => {
+      lastSaved.current = canon(cfg);                     // the draft row is gone server-side; don't re-save it as a new draft
+      setDraftInfo({ isDraft: false, at: null, saving: false });
+      setReport(r.report); toast("ok", `Live! Version ${r.version} is now answering customers.`); qc.invalidateQueries();
+    },
     onError: (e: any) => {
       const rep = e?.detail?.report as Report | undefined;
       if (rep) setReport(rep);
@@ -71,8 +111,14 @@ function Form({ id, initial, version, name, go }: { id: string; initial: Busines
   return (
     <div className="space-y-5">
       <div className="sticky top-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-3 border-b border-line bg-ink/95 px-1 py-2 backdrop-blur">
-        <p className="flex items-center gap-2 text-sm text-muted">{report && (report.ok ? <Badge tone="ok">ready</Badge> : <Badge tone="bad">{blockingCount} to fix</Badge>)}{version ? `Live version ${version}. Changes go live only when you press “Go live”.` : "Nothing is live yet for this client."}</p>
+        <p className="flex items-center gap-2 text-sm text-muted">
+          {report && (report.ok ? <Badge tone="ok">ready</Badge> : <Badge tone="bad">{blockingCount} to fix</Badge>)}
+          {draftInfo.isDraft && <Badge tone="warn">draft</Badge>}
+          {version ? `Live version ${version}. Changes go live only when you press “Go live”.` : "Nothing is live yet for this client."}
+          {draftInfo.saving ? <span className="text-xs">Saving…</span> : draftInfo.at ? <span className="text-xs">Draft saved {new Date(draftInfo.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span> : null}
+        </p>
         <div className="flex gap-2">
+          {draftInfo.isDraft && <Button size="sm" variant="ghost" busy={discard.isPending} onClick={() => confirm(version ? "Discard this draft and go back to the live version?" : "Discard this draft? Unsaved setup will be lost.") && discard.mutate()}>Discard draft</Button>}
           <Button size="sm" variant="ghost" onClick={() => { setJson(JSON.stringify(cfg, null, 2)); setShowJson((s) => !s); }}>{showJson ? "Hide" : "Advanced: JSON"}</Button>
           <Button busy={check.isPending} onClick={() => check.mutate()}>Check readiness</Button>
           <Button variant="primary" busy={live.isPending} onClick={() => live.mutate()}>Go live{version ? " (new version)" : ""}</Button>

@@ -6,14 +6,14 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the design, audit trace
 ## Run the tests (no network, no Supabase needed)
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 311 tests, ~7s
+python -m pytest            # 459 tests, ~8s
 ```
 
 ## Layout
 `hooze/{api,runtime,capabilities,config_engine,packs,llm,channels,payments,kernel}` · `migrations/` · `tests/` · `docs/`
 
 ## Bring up a staging environment
-1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0005`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run).
+1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0007`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts.
 2. `cp .env.example .env` and fill it (generate `VAULT_MASTER_KEY`, `PLATFORM_ADMIN_KEY`, `INTERNAL_CRON_SECRET`).
 3. `uvicorn hooze.main:app` (or the `Dockerfile`). One worker until `UPSTASH_*` is set.
 4. Onboard a tenant with the platform key:
@@ -29,7 +29,17 @@ python -m pytest            # 311 tests, ~7s
 5. Point the Evolution webhook at the returned URL with header `x-hooze-secret: <secret>`; set Paystack's webhook to the returned URL.
 6. Schedule `POST /internal/tick` (header `x-cron-secret`) every 15 min. Nudges start in **dry-run**; review `NUDGE_DRY_RUN_WOULD_SEND` events before enabling.
 
+## Onboarding: drafts before connections
+Business setup is saved **independently of going live**: the Setup form autosaves a draft (`PUT /v1/tenants/{id}/config/draft`)
+after every quiet moment, with nothing connected — no WhatsApp, no Paystack. Closing the tab loses nothing; reopening Setup loads
+the draft (badge: *draft*), which can be discarded back to the live version. "Go live" is still gated on full readiness, and a
+successful activation deletes the draft so it can't shadow the live config. Onboard in whatever order suits the client:
+business info first, WhatsApp pairing whenever the phone is in hand.
+
 ## Conversation behaviour (what the first real chats taught us)
+- **Captions count.** A photo/video/document sent **with a caption** ("how much is this one?") is answered as if the caption were
+  typed; only wordless media gets the canned "could you describe that?" reply. Text inside disappearing-message chats and
+  view-once media (ephemeral/viewOnce wrappers) is read too — it used to parse as unreadable.
 - **One welcome.** If a client has a scripted welcome (Setup → Tone → Greeting), a plain "Hello" gets that welcome only; a real question gets the welcome, then the answer (the model is told not to greet again).
 - **Bookings need a time.** The assistant asks "what day and time?" instead of sending the team a request with no time. A flexible answer ("whenever you're free") counts.
 - **Cards once.** A full record card (details + photos) is sent at most once per customer per 24h; the assistant is told to answer in its own words and share a card only when asked.
