@@ -7,6 +7,7 @@ Here staff numbers are per-tenant config and the channel is resolved per tenant.
 from __future__ import annotations
 from datetime import datetime, timezone
 
+from hooze.kernel import capture
 from hooze.kernel.db import first
 from hooze.runtime.store import ConversationStore
 
@@ -17,10 +18,12 @@ class Outbox:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     async def _channel(self, channel_id: str | None = None) -> dict | None:
-        q = self.pdb.table("channels").select("*").eq("tenant_id", self.tenant_id).eq("status", "active")
         if channel_id:
-            q = q.eq("id", channel_id)
-        return first(await q.limit(1).execute())
+            # A chat on the web test channel (never 'active': it must not be picked for WhatsApp sends) answers on that channel. Falling
+            # back to a real WhatsApp number would text a made-up test phone number from the client's own WhatsApp.
+            row = first(await self.pdb.table("channels").select("*").eq("tenant_id", self.tenant_id).eq("id", channel_id).limit(1).execute())
+            return row if row and (row.get("status") == "active" or row.get("kind") == "web_demo") else None
+        return first(await self.pdb.table("channels").select("*").eq("tenant_id", self.tenant_id).eq("status", "active").limit(1).execute())
 
     async def _record(self, ch: dict, phone: str, text: str, conversation_id: str | None, store) -> None:
         """Bookkeeping AFTER a confirmed send (never retried). Without this, nudges / booking confirmations / receipts were
@@ -43,8 +46,11 @@ class Outbox:
             # A tenant can have several numbers: answer from the one this conversation is on, not just "the first active one".
             conv = first(await self.pdb.for_tenant(self.tenant_id).table("conversations").select("channel_id").eq("id", conversation_id).limit(1).execute())
             channel_id = conv["channel_id"] if conv else None
+        cap = capture.active()
+        if cap is not None and cap.get("channel_id"):
+            channel_id = cap["channel_id"]                      # during a web test-chat turn NOTHING goes out on a real WhatsApp number
         ch = await self._channel(channel_id)
-        if not ch and channel_id:
+        if not ch and channel_id and cap is None:
             ch = await self._channel(None)                      # that number was disabled since: fall back to any active one
         if not ch:
             await self.events.warn("OUTBOX_NO_CHANNEL", tenant_id=self.tenant_id)
@@ -59,6 +65,10 @@ class Outbox:
         if not self.staff:
             await self.events.warn("NO_STAFF_NUMBER_CONFIGURED", tenant_id=self.tenant_id)
             return 0
+        cap = capture.active()
+        if cap is not None:                                     # web test chat / demo link: show the alert there, never text the real team
+            cap["staff"].append(text)
+            return len(self.staff)
         channels = (await self.pdb.table("channels").select("*").eq("tenant_id", self.tenant_id).eq("status", "active").order("created_at").execute()).data or []
         for phone in self.staff:
             # A client can have several numbers. Alerts used to go out through whichever came back first, so one disconnected/banned number

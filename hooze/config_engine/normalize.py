@@ -212,6 +212,11 @@ def normalize_raw(raw: Any) -> tuple[dict, list[str]]:
     elif hours_raw not in (None, ""):
         fix("hours must be an object like {\"default\": [\"09:00\", \"18:00\"]}; it was reset.")
 
+    mode = _s(c.get("mode")).lower().replace("-", "_").replace(" ", "_") or "full_auto"
+    if mode not in ("full_auto", "after_hours", "assist"):
+        fix(f"communication.mode \"{mode}\" is not one of full_auto, after_hours, assist; it was set to full_auto.")
+        mode = "full_auto"
+
     payments = ig.get("payments")
     clean = {
         "identity": identity, "offerings": offerings, "faqs": faqs, "qualification_slots": slots,
@@ -222,7 +227,7 @@ def normalize_raw(raw: Any) -> tuple[dict, list[str]]:
         "handoff": {"contact_name": _s(h.get("contact_name")), "staff_phones": _str_list(h.get("staff_phones")),
                     "human_request_patterns": _str_list(h.get("human_request_patterns"))},
         "communication": {"tone": _s(c.get("tone")) or "warm, brief and professional", "greeting": _s(c.get("greeting")),
-                          "rules": _str_list(c.get("rules"))},
+                          "rules": _str_list(c.get("rules")), "mode": mode},
         "restrictions": {"never_say": _str_list(r.get("never_say")), "prohibited_claims": _str_list(r.get("prohibited_claims"))},
         "integrations": {"payments": _s(payments) or None, "payments_connected": bool(ig.get("payments_connected")),
                          "channel_connected": bool(ig.get("channel_connected"))},

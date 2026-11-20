@@ -48,4 +48,7 @@ class AdapterFactory:
             cfg = channel.get("config") or {}
             api_key = self.vault.decrypt(channel["credentials_enc"]) if self.vault and channel.get("credentials_enc") else ""
             return EvolutionAdapter(base_url=cfg["base_url"], api_key=api_key, instance_name=channel["instance_name"], http_factory=self._http)
+        if kind == "web_demo":
+            from hooze.channels.webdemo import WebDemoAdapter
+            return WebDemoAdapter()
         raise ValueError(f"unsupported channel kind: {kind}")

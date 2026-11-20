@@ -117,9 +117,9 @@ class ConversationStore:
 
     async def count_recent_bot(self, conversation_id: str, seconds: int = 60) -> int:
         cutoff = (self.clock() - timedelta(seconds=seconds)).isoformat()
-        rows = (await self.db.table("messages").select("id").eq("conversation_id", conversation_id)
-                .eq("sender_type", "bot").gte("created_at", cutoff).execute()).data or []
-        return len(rows)
+        res = await (self.db.table("messages").select("id", count="exact").eq("conversation_id", conversation_id)
+                     .eq("sender_type", "bot").gte("created_at", cutoff).limit(1).execute())
+        return int(res.count or 0)                      # a COUNT, not a fetch: the daily ceiling would otherwise pull hundreds of rows per turn
 
     async def set_contact(self, contact_id: str, **fields) -> None:
         await self.db.table("contacts").update(fields).eq("id", contact_id).execute()

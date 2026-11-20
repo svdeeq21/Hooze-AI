@@ -1,0 +1,45 @@
+{
+  "identity": {
+    "name": "Mama Tee's Kitchen",
+    "industry": "restaurant & food delivery",
+    "description": "Home-style Nigerian meals cooked fresh daily, for pickup or delivery within Lekki and Ajah.",
+    "website": "https://example.com/mamatee",
+    "address": "12 Admiralty Way, Lekki Phase 1, Lagos",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Instagram": "@mamateeskitchen (demo)", "Pickup address": "12 Admiralty Way, Lekki Phase 1"}
+  },
+  "offerings": [
+    {"name": "Jollof Rice Combo", "category": "Rice", "description": "Smoky party jollof with fried plantain and coleslaw", "price_minor": 450000,
+     "option_groups": [
+       {"name": "Protein", "selection": "single", "required": true, "options": [{"name": "Chicken"}, {"name": "Beef"}, {"name": "Turkey", "price_minor": 150000}, {"name": "Fish", "price_minor": 100000}]},
+       {"name": "Extras", "selection": "multiple", "required": false, "options": [{"name": "Extra plantain", "price_minor": 50000}, {"name": "Moi moi", "price_minor": 70000}]}
+     ]},
+    {"name": "Fried Rice Combo", "category": "Rice", "description": "Vegetable fried rice with plantain and coleslaw", "price_minor": 450000,
+     "option_groups": [
+       {"name": "Protein", "selection": "single", "required": true, "options": [{"name": "Chicken"}, {"name": "Beef"}, {"name": "Turkey", "price_minor": 150000}]}
+     ]},
+    {"name": "Pounded Yam & Egusi", "category": "Swallow", "description": "Smooth pounded yam with rich egusi soup", "price_minor": 550000,
+     "option_groups": [
+       {"name": "Protein", "selection": "single", "required": true, "options": [{"name": "Beef"}, {"name": "Goat meat", "price_minor": 100000}, {"name": "Assorted", "price_minor": 150000}]}
+     ]},
+    {"name": "Small Chops Pack", "category": "Small chops", "description": "Puff-puff, samosa, spring rolls and peppered gizzard (serves 2)", "price_minor": 400000},
+    {"name": "Zobo (50cl)", "category": "Drinks", "description": "Chilled hibiscus drink with ginger and pineapple", "price_minor": 80000},
+    {"name": "Chapman (50cl)", "category": "Drinks", "description": "Classic non-alcoholic Chapman", "price_minor": 100000}
+  ],
+  "faqs": [
+    {"question": "Do you deliver?", "answer": "Yes, within Lekki, Ajah and Victoria Island. The delivery fee depends on your area and is confirmed by our team after you order."},
+    {"question": "How long does an order take?", "answer": "Pickup orders are usually ready in 30-40 minutes; delivery takes 45-75 minutes depending on traffic."},
+    {"question": "Do you cater for events?", "answer": "Yes. For parties of 30 or more, ask to speak with our events manager and we will send a custom quote."}
+  ],
+  "sales_process": {"goal": "order", "notes": "Upsell a drink with every meal, once. Never pressure."},
+  "hours": {"default": ["09:00", "21:00"], "6": ["12:00", "20:00"]},
+  "handoff": {"contact_name": "Tolu from Mama Tee's", "staff_phones": ["2348000000001"]},
+  "communication": {
+    "tone": "warm, friendly and quick, like a favourite neighbourhood restaurant",
+    "greeting": "Hi! 👋 Welcome to Mama Tee's Kitchen. Would you like to see today's menu or order something you already have in mind?",
+    "rules": ["Suggest a drink once per order, never twice.", "Always confirm pickup or delivery before checkout."]
+  },
+  "restrictions": {"never_say": ["free delivery", "discount"], "prohibited_claims": ["healthy", "organic"]},
+  "integrations": {"payments": "paystack"}
+}

@@ -6,14 +6,14 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the design, audit trace
 ## Run the tests (no network, no Supabase needed)
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 459 tests, ~8s
+python -m pytest            # 498 tests, ~50s  (Windows: set PYTHONUTF8=1 first)
 ```
 
 ## Layout
 `hooze/{api,runtime,capabilities,config_engine,packs,llm,channels,payments,kernel}` · `migrations/` · `tests/` · `docs/`
 
 ## Bring up a staging environment
-1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0007`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts.
+1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0008`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts, `0008` operating modes, test chat, demo links and weekly reports.
 2. `cp .env.example .env` and fill it (generate `VAULT_MASTER_KEY`, `PLATFORM_ADMIN_KEY`, `INTERNAL_CRON_SECRET`).
 3. `uvicorn hooze.main:app` (or the `Dockerfile`). One worker until `UPSTASH_*` is set.
 4. Onboard a tenant with the platform key:
@@ -64,6 +64,26 @@ business info first, WhatsApp pairing whenever the phone is in hand.
 - `deploy/docker-compose.hooze-core.yml` — compose override that runs hooze-core in the same stack as Evolution API (**untested**; see the comments in the file for the container-network URLs).
 - `POST /internal/tick` returns `{"status": "already_running"}` if a previous sweep is still in progress (overlaps are refused, not queued).
 - `LLM_PROVIDER_COOLDOWN_SECONDS` (default 30) — a provider that just failed is skipped for this long; `LLM_TIMEOUT_SECONDS` (default 20) is the per-call ceiling.
+
+## Demo a prospect in 10 minutes (no WhatsApp needed)
+Six ready-made businesses live in `templates/demo/` (restaurant, retail, real estate, clinic, salon, school). One command creates the
+client, puts it live with real AI replies, and prints a private demo link for the prospect:
+```bash
+PLATFORM_ADMIN_KEY=... python -m scripts.demo_tenant --template salon --name "Their Salon" --staff-phone 080... --api https://your-api --go-live
+```
+The link opens `https://<dashboard>/try/<token>`: a chat page that needs no sign-in, with "behind the scenes" (what was captured, what
+the owner's phone receives). Each link expires and has a message allowance. Set `VITE_API_URL` when building the dashboard so the page
+knows where the API is. Pair a WhatsApp number later to put the same client on a real number.
+
+## Modes, test chat and owner reports
+- **Operating modes** (Setup → section 2): *Full auto* (default); *After-hours*: silent during opening hours, answers (and takes orders)
+  while you're closed; *Assist*: every reply waits in Conversations for a person to send, edit or discard.
+- **Test chat** (client → Test chat tab): talk to the live assistant with real AI replies. Nothing is sent on WhatsApp, the team isn't
+  texted (alerts are shown in the page), payments are simulated. Test customers use made-up `000…` numbers; "Clear all test chats"
+  removes them. A client with only the test chat enabled can go live before its WhatsApp number is paired.
+- **Weekly report**: every Monday from 08:00 (client's timezone) the `/internal/tick` sweep sends each client's staff numbers their
+  week in numbers. Preview or send now from the client's Overview tab. `WEEKLY_REPORT_ENABLED=false` turns it off.
+- Needs `migrations/0008_modes_demo_reports.sql`. Security review of this release: `docs/SESSION6_LAUNCH_AUDIT.md`.
 
 ## Adding a new kind of business
 - Fits an existing goal (`order` / `consult_and_book`)? **Write a `BusinessConfig`. No code.**

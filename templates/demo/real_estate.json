@@ -1,0 +1,43 @@
+{
+  "identity": {
+    "name": "Crestview Homes",
+    "industry": "real estate",
+    "description": "Verified homes and land for sale and rent in Abuja, with inspections arranged within 48 hours.",
+    "website": "https://example.com/crestview",
+    "address": "Plot 45 Aminu Kano Crescent, Wuse 2, Abuja",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Office hours": "Mon-Sat, 9am-6pm", "Brochure": "https://example.com/crestview/brochure.pdf"}
+  },
+  "offerings": [
+    {"name": "Maitama 4-Bed Terrace", "category": "For sale", "description": "4 bedroom terrace duplex with BQ, fitted kitchen and 24/7 power", "price_minor": 18500000000,
+     "details": {"location": "Maitama", "bedrooms": "4", "title": "C of O", "price": "₦185,000,000"}},
+    {"name": "Jabi Lakeside 2-Bed Flat", "category": "For sale", "description": "2 bedroom serviced flat five minutes from Jabi Lake Mall", "price_minor": 8500000000,
+     "details": {"location": "Jabi", "bedrooms": "2", "title": "C of O", "price": "₦85,000,000"}},
+    {"name": "Gwarinpa 3-Bed Bungalow", "category": "For rent", "description": "3 bedroom detached bungalow in a gated estate", "price_minor": 450000000, "price_note": "per year",
+     "details": {"location": "Gwarinpa", "bedrooms": "3", "price": "₦4,500,000 per year"}},
+    {"name": "Katampe Extension Plot", "category": "Land", "description": "600sqm residential plot in a developed area", "price_minor": 5500000000,
+     "details": {"location": "Katampe Extension", "size": "600sqm", "title": "C of O", "price": "₦55,000,000"}}
+  ],
+  "faqs": [
+    {"question": "Do you offer payment plans?", "answer": "Yes, on selected properties, spread over 6 to 12 months. The exact plan is agreed with our sales team."},
+    {"question": "Are your titles verified?", "answer": "Every listing's title document is checked before we list it, and buyers can verify it themselves at AGIS before paying."},
+    {"question": "Is there an inspection fee?", "answer": "No. Inspections are free."}
+  ],
+  "qualification_slots": [
+    {"name": "purpose", "label": "Buy or rent", "type": "enum", "values": ["buy", "rent"], "aliases": {"buy": ["purchase", "own"], "rent": ["lease"]}, "ask": "Are you looking to buy or to rent?"},
+    {"name": "budget", "label": "Budget", "type": "money", "ask": "What budget range are you working with?"},
+    {"name": "location", "label": "Preferred area", "type": "text", "ask": "Which areas of Abuja do you prefer?"},
+    {"name": "bedrooms", "label": "Bedrooms", "type": "number", "required": false}
+  ],
+  "stuck_after_user_messages": 12,
+  "sales_process": {"goal": "consult_and_book", "notes": "Recommend at most two properties at a time that fit the budget and area."},
+  "booking": {"enabled": true, "subject_label": "inspection"},
+  "handoff": {"contact_name": "Emeka, our senior agent", "staff_phones": ["2348000000002"]},
+  "communication": {
+    "tone": "professional, reassuring and concise",
+    "greeting": "Hello and welcome to Crestview Homes 🏡 Are you looking to buy, rent, or invest in land?",
+    "rules": ["Never share more than two listings in one message.", "If a property is above their budget, say so honestly and offer the closest match."]
+  },
+  "restrictions": {"never_say": ["guaranteed returns", "price will double"], "prohibited_claims": ["government approved", "zero risk"]}
+}

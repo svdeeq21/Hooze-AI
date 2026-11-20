@@ -6,7 +6,7 @@
  * Every repair is returned in `fixes` so the person sees exactly what changed. It never invents business facts:
  * missing prices, phones and `sales_process.goal` stay missing for the readiness check to flag.
  */
-import type { BusinessConfig, Offering, OptionGroup, Slot } from "./api";
+import type { BusinessConfig, Mode, Offering, OptionGroup, Slot } from "./api";
 
 type Obj = Record<string, unknown>;
 const SLOT_TYPES = ["text", "number", "money", "enum", "bool"] as const;
@@ -134,7 +134,7 @@ export function normalizeConfig(raw: unknown): Normalized {
     booking: { enabled: !!b.enabled, subject_label: str(b.subject_label) || "appointment" },
     hours,
     handoff: { contact_name: str(h.contact_name), staff_phones: strList(h.staff_phones), human_request_patterns: strList(h.human_request_patterns) },
-    communication: { tone: str(c.tone) || "warm, brief and professional", greeting: str(c.greeting), rules: strList(c.rules) },
+    communication: { tone: str(c.tone) || "warm, brief and professional", greeting: str(c.greeting), rules: strList(c.rules), mode: toMode(c.mode) },
     restrictions: { never_say: strList(rs.never_say), prohibited_claims: strList(rs.prohibited_claims) },
     integrations: { payments: str(ig.payments) || null, payments_connected: !!ig.payments_connected, channel_connected: !!ig.channel_connected },
   };
@@ -186,10 +186,16 @@ TEMPLATE
   "booking": { "enabled": true, "subject_label": "reservation request" },
   "hours": { "default": ["09:00", "18:00"] },
   "handoff": { "contact_name": "", "staff_phones": [], "human_request_patterns": ["speak to a human"] },
-  "communication": { "tone": "warm, brief and professional", "greeting": "", "rules": [] },
+  "communication": { "tone": "warm, brief and professional", "greeting": "", "rules": [], "mode": "full_auto" },
   "restrictions": { "never_say": [], "prohibited_claims": [] },
   "integrations": { "payments": null, "payments_connected": false, "channel_connected": false }
 }
 
 THE BUSINESS TO CONFIGURE:
 (describe the business here)`;
+
+// Operating mode (full_auto | after_hours | assist). Anything else becomes full_auto, the safe default.
+function toMode(v: unknown): Mode {
+  const s = String(v ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return s === "after_hours" || s === "assist" ? s : "full_auto";
+}

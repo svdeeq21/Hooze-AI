@@ -11,7 +11,10 @@ import io
 from dataclasses import dataclass
 
 MB = 1024 * 1024
+MAX_PIXELS = 60_000_000          # ~ an 8000x7500 photo. Anything bigger is a "decompression bomb" (tiny file, enormous canvas), not a menu photo
 HEIC_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"heim", b"heis"}
+AVIF_BRANDS = {b"avif", b"avis"}
+AUDIO_BRANDS = {b"M4A ", b"M4B ", b"M4P "}
 
 
 class MediaError(ValueError):
@@ -41,6 +44,10 @@ def sniff(data: bytes) -> str | None:
         brand = data[8:12]
         if brand in HEIC_BRANDS:
             return "heic"
+        if brand in AVIF_BRANDS:
+            return "avif"                # same container as MP4: an AVIF photo used to be stored and sent as a "video"
+        if brand in AUDIO_BRANDS:
+            return "audio"
         if brand == b"qt  ":
             return "mov"
         return "mp4"
@@ -52,9 +59,15 @@ def _prepare_image(data: bytes, max_px: int, quality: int) -> bytes:
         from PIL import Image, ImageOps
     except ImportError as e:      # pragma: no cover - dependency is in requirements.txt
         raise MediaError("Image processing isn't installed on the server (pip install Pillow).") from e
-    Image.MAX_IMAGE_PIXELS = 60_000_000          # refuse "decompression bombs" (tiny file, enormous canvas)
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS          # refuse "decompression bombs" (tiny file, enormous canvas)
     try:
-        img = Image.open(io.BytesIO(data))
+        img = Image.open(io.BytesIO(data))       # reads the header only
+    except Exception as e:
+        raise MediaError("That image looks damaged or isn't a real photo. Try exporting it again as JPG or PNG.") from e
+    w, h = img.size
+    if w * h > MAX_PIXELS:                       # Pillow only WARNS between 1x and 2x its limit, and would still decode ~360 MB. Check before decoding.
+        raise MediaError(f"That image is {w}x{h} pixels — far larger than a photo needs. Resize it (under 6000 px on the longest side) and try again.")
+    try:
         img.load()
         img = ImageOps.exif_transpose(img)       # phones store rotation in metadata; apply it, then drop the metadata
     except Exception as e:
@@ -89,4 +102,8 @@ def process(data: bytes, *, max_image_mb: int = 15, max_video_mb: int = 16, max_
         raise MediaError("That's an iPhone HEIC photo. Export or share it as JPG first (or set the camera to \"Most Compatible\").")
     if kind == "mov":
         raise MediaError("That's a .mov video. Please convert it to .mp4 — WhatsApp plays MP4 reliably.")
+    if kind == "avif":
+        raise MediaError("That's an AVIF image. Save or export it as JPG or PNG first.")
+    if kind == "audio":
+        raise MediaError("That's an audio file. Only photos (JPG, PNG, WebP) and MP4 videos can be added to the menu.")
     raise MediaError("Only photos (JPG, PNG, WebP) and MP4 videos can be uploaded.")

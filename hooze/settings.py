@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     maintenance_enabled: bool = True            # run the recovery/monitor loop inside this process
     channel_check_interval_seconds: int = 120
     webhook_allow_query_token: bool = False   # legacy ?token= form puts the secret in access logs; header (x-hooze-secret) only by default
+    webhook_max_bytes: int = 5_000_000        # larger webhook bodies are refused (413) before they are parsed: memory/DoS ceiling
+    max_inbound_chars: int = 4000             # longer customer messages are cut to this before the AI sees them (cost ceiling). 0 = no limit
     cors_allowed_origins: str = ""   # comma-separated browser origins allowed to call the API (the dashboard). Empty = no browser access.
 
     # Storage
@@ -76,6 +78,7 @@ class Settings(BaseSettings):
 
     # Global kill switches (flip in env, no deploy) — pd's follow_up_engine_enabled, now platform-wide
     nudges_globally_enabled: bool = True
+    weekly_report_enabled: bool = True     # Monday-morning results message to each client's staff numbers (sent by the /internal/tick sweep)
 
     # Runtime defaults (a tenant's RuntimeConfig can override the ones that make sense)
     history_window: int = 24
@@ -93,6 +96,19 @@ class Settings(BaseSettings):
                    if not getattr(self, k)]
         if missing:
             raise RuntimeError(f"Missing required settings: {', '.join(missing)}")
+        # The platform key can read and change EVERY client; the cron secret can trigger sends. A short value can be guessed.
+        weak = [k for k in ("platform_admin_key", "internal_cron_secret") if len(getattr(self, k)) < 32]
+        if weak:
+            raise RuntimeError(f"These settings are too short to be safe (use 32+ random characters, e.g. "
+                               f"python -c \"import secrets; print(secrets.token_urlsafe(48))\"): {', '.join(weak)}")
+        if self.platform_admin_key == self.internal_cron_secret:
+            raise RuntimeError("PLATFORM_ADMIN_KEY and INTERNAL_CRON_SECRET must be different values.")
+        try:
+            from cryptography.fernet import Fernet
+            Fernet(self.vault_master_key.encode())
+        except Exception:
+            raise RuntimeError("VAULT_MASTER_KEY is not a valid key. Generate one with: "
+                               "python -c \"from hooze.security import Vault; print(Vault.generate_key())\"")
 
 
 @lru_cache

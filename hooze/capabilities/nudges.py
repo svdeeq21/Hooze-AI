@@ -101,7 +101,7 @@ class NudgesCapability(Capability):
                 await self.ctx.events.warn("NUDGE_NO_TEMPLATE", tenant_id=self.ctx.tenant_id, state=st.name, step=step)
                 summary["skipped"] += 1
                 continue
-            slots = defaultdict(lambda: "", {**((contact.get("attributes") or {}).get("slots") or {}), "name": (contact.get("display_name") or "there").split()[0]})
+            slots = defaultdict(lambda: "", {**((contact.get("attributes") or {}).get("slots") or {}), "name": ((contact.get("display_name") or "").split() or ["there"])[0]})      # a name of only spaces used to crash the whole sweep
             message = st.nudges[step].format_map(slots)
             if dry:
                 await self.ctx.events.info("NUDGE_DRY_RUN_WOULD_SEND", tenant_id=self.ctx.tenant_id, state=st.name, step=step, preview=message[:120])

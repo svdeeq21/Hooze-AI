@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from hooze.capabilities.availability import resolve_open, to_local
 from hooze.channels.base import InboundMessage
 from hooze.kernel.db import first
 from hooze.kernel.locks import distributed_lock
@@ -27,6 +28,7 @@ from hooze.llm.gateway import LLMUnavailable
 from hooze.runtime import guards
 from hooze.runtime.actions import ToolRegistry, execute
 from hooze.runtime.config import RuntimeConfig
+from hooze.runtime.drafts import DraftSink
 from hooze.runtime.messenger import Messenger
 from hooze.runtime.playbook import TurnFacts
 from hooze.runtime.prompt import build_system_prompt, build_user_prompt
@@ -141,7 +143,7 @@ class Pipeline:
     async def _customer(self, tenant, channel, adapter, db, store: ConversationStore, cfg: RuntimeConfig, caps, ctx, inbound, phone, trace, replay: bool = False, attempt: Optional[int] = None) -> TurnOutcome:
         tid = tenant["id"]
         t0 = time.perf_counter()
-        contact, is_new = await store.get_or_create_contact(phone, inbound.push_name)
+        contact, is_new = await store.get_or_create_contact(phone, guards.clean_name(inbound.push_name))
         initial = cfg.playbook.initial if cfg.playbook else "active"
         conv = await store.get_or_create_conversation(contact["id"], channel["id"], initial)
 
@@ -153,6 +155,12 @@ class Pipeline:
             transcript = await self.transcriber(audio) if audio else None
             if transcript:
                 text, content_type = transcript.strip(), "text"
+        # WhatsApp allows ~65,000 characters per message. Every character is paid for again on every later turn (it sits in the history), so
+        # one pasted essay — or someone deliberately flooding the bot — multiplies the AI bill. Real customer messages are far below this.
+        max_chars = int(getattr(self.settings, "max_inbound_chars", 0) or 0)
+        if max_chars and len(text) > max_chars:
+            await self.events.warn("INBOUND_TRUNCATED", tenant_id=tid, trace_id=trace, chars=len(text), kept=max_chars)
+            text = text[:max_chars].rstrip() + " …"
 
         if not await store.claim_inbound(conv, contact["id"], channel["id"], inbound.provider_message_id, text or f"[{inbound.kind}]", content_type):
             # A genuine provider redelivery is ignored. BUT a message replayed from the queue after a crash is ALSO "already stored" while
@@ -163,8 +171,9 @@ class Pipeline:
                 await self.events.info("DUPLICATE_MESSAGE_IGNORED", tenant_id=tid, trace_id=trace)
                 return TurnOutcome("duplicate")
 
+        drafts = DraftSink(db, conv["id"], contact["id"], self.events, tid, trace) if cfg.mode == "assist" else None
         out = Messenger(adapter=adapter, store=store, to=phone, conversation_id=conv["id"], tenant_id=tid, events=self.events, trace_id=trace,
-                        delay_range=(self.settings.typing_delay_min, self.settings.typing_delay_max), sleep=self.sleep)
+                        delay_range=(self.settings.typing_delay_min, self.settings.typing_delay_max), sleep=self.sleep, drafts=drafts)
         turn = Turn(tenant=tenant, channel=channel, contact=contact, conversation=conv, inbound=inbound, text=text, config=cfg, db=db, store=store,
                     out=out, events=self.events, llm=self.llm, now=self.clock(), trace_id=trace, is_new_contact=is_new,
                     state=conv.get("state") or initial, capabilities=caps)
@@ -174,6 +183,12 @@ class Pipeline:
 
         if contact.get("ai_paused") or conv.get("status") == "handoff":
             return TurnOutcome("paused")                 # a human owns this conversation; message is stored
+
+        # After-hours mode: while the business is OPEN the team answers on their own phone as usual; the assistant only covers
+        # the hours they are closed. The message is stored either way, so the chat history stays complete.
+        if cfg.mode == "after_hours" and cfg.hours and resolve_open(None, cfg.hours, to_local(self.clock(), cfg.timezone))[0]:
+            await self.events.info("AFTER_HOURS_TEAM_TIME", tenant_id=tid, trace_id=trace)
+            return TurnOutcome("team_hours", detail="after_hours_mode")
 
         if not text:                                     # media with no words we can use (a captioned photo DOES carry words: it flows on to the LLM as text)
             replies = {**DEFAULT_MEDIA_REPLIES, **cfg.media_replies}
@@ -190,6 +205,15 @@ class Pipeline:
         if await store.count_recent_bot(conv["id"]) >= cfg.max_bot_replies_per_minute:
             await self.events.warn("RATE_LIMITED", tenant_id=tid, trace_id=trace)
             return TurnOutcome("gated", detail="rate_limited")
+        # A daily ceiling per chat. No genuine customer needs hundreds of AI replies in one day; a script or a prank does, and each one costs
+        # money. Past the ceiling the chat goes to a person instead of the AI answering forever. If that person RESUMES the assistant they
+        # have vouched for this customer, so the ceiling is not applied to this chat again (handoff_reason keeps the record of it).
+        if (cfg.max_bot_replies_per_day and conv.get("handoff_reason") != "DAILY_REPLY_CAP_REACHED"
+                and await store.count_recent_bot(conv["id"], seconds=86_400) >= cfg.max_bot_replies_per_day):
+            await self.events.warn("DAILY_REPLY_CAP_REACHED", tenant_id=tid, trace_id=trace, cap=cfg.max_bot_replies_per_day)
+            await caps["handoff"].escalate(turn, "DAILY_REPLY_CAP_REACHED")
+            await out.text("Thanks for your patience — a member of the team will pick this conversation up from here.", typing=False)
+            return TurnOutcome("handoff", detail="daily_cap")
 
         hist = await store.recent_messages(conv["id"], cfg.history_window)
         if hist and hist[-1]["sender_type"] == "contact" and hist[-1]["content"] == text:
@@ -307,7 +331,7 @@ class Pipeline:
         chunk = await store.messages_range(turn.conversation["id"], done, boundary - 1)
         if not chunk:
             return
-        transcript = "\n".join(f"{'Customer' if m['sender_type'] == 'contact' else 'You'}: {m['content']}" for m in chunk)
+        transcript = "\n".join(f"{'Customer' if m['sender_type'] == 'contact' else 'You'}: {guards.history_line(m['content'] or '')}" for m in chunk)
         existing = turn.conversation.get("summary") or ""
         summary = await self.llm.summarize(turn.tenant_id, (f"EXISTING SUMMARY:\n{existing}\n\nNEW MESSAGES:\n" if existing else "") + transcript)
         if summary:

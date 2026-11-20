@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type Stats, type TenantDetail } from "../lib/api";
 import { errMsg, naira } from "../lib/util";
 import { Button, Card, Stat, useToast } from "../components/ui";
+import { WeeklyReportCard } from "./TestChatTab";
 
 const live = (s: string) => ["open", "connected"].includes(s.toLowerCase());
 
@@ -47,6 +48,7 @@ export default function OverviewTab({ id, detail, stats, go }: { id: string; det
             : <Button variant="danger" busy={toggle.isPending} onClick={() => confirm(`Pause the assistant for ${detail.tenant.name}? Customers will get no replies until you resume.`) && toggle.mutate("suspended")}>Pause assistant</Button>}
         </div>
       </Card>
+      {detail.active_config && <WeeklyReportCard id={id} />}
     </div>
   );
 }

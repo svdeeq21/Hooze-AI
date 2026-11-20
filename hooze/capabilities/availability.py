@@ -52,7 +52,10 @@ class AvailabilityCapability(Capability):
 
     async def is_open(self) -> tuple[bool, Optional[str]]:
         local = to_local(self.ctx.clock(), self.ctx.config.timezone)
-        return resolve_open(await self._row(), self.config.get("hours", {}), local)
+        # In after-hours mode the opening hours say when the TEAM answers, not when orders are accepted: the assistant takes orders
+        # while the business is closed (that is the point of the mode). A manual pause / "closed today" still applies.
+        hours = {} if getattr(self.ctx.config, "mode", "full_auto") == "after_hours" else self.config.get("hours", {})
+        return resolve_open(await self._row(), hours, local)
 
     async def gate(self, turn) -> Optional[GateResult]:
         ok, reason = await self.is_open()

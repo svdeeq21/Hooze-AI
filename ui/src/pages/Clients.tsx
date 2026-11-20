@@ -24,7 +24,17 @@ export default function Clients() {
     <>
       <PageHeader title="Clients" sub="Every business using Hooze." action={<Button variant="primary" onClick={() => setOpen(true)}>+ New client</Button>} />
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} retry={() => q.refetch()} /> : !q.data?.length ? <Empty>No clients yet. Create one to start setting up their assistant.</Empty> : (
-        <Card className="overflow-hidden !p-0">
+        <>
+        <ul className="grid gap-3 md:hidden">{q.data.map((t) => (
+          <li key={t.id}><Link to="/clients/$tenantId" params={{ tenantId: t.id }} search={{ tab: "overview" }} className="block rounded-xl border border-line bg-panel p-4 hover:border-amber">
+            <div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate font-medium">{t.name}</div><div className="text-xs text-muted">{t.slug} · added {ago(t.created_at)}</div></div><StatusBadge status={t.status} /></div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {t.channels ? <Badge tone="ok">WhatsApp: {t.channels}</Badge> : <Badge tone="bad">no WhatsApp</Badge>}
+              {t.active_version ? <Badge tone="ok">live · v{t.active_version}</Badge> : <Badge tone="warn">not set up</Badge>}
+              <Badge tone="mute">{t.conversations} chats</Badge>{t.handoff > 0 && <Badge tone="warn">{t.handoff} waiting</Badge>}
+            </div>
+          </Link></li>))}</ul>
+        <Card className="hidden overflow-hidden !p-0 md:block">
           <table className="w-full text-sm">
             <thead className="border-b border-line text-left text-xs uppercase tracking-wider text-muted"><tr><th className="px-4 py-3">Client</th><th>Status</th><th>WhatsApp</th><th>Setup</th><th>Chats</th><th className="pr-4">Added</th></tr></thead>
             <tbody className="divide-y divide-line">{q.data.map((t) => (
@@ -37,7 +47,8 @@ export default function Clients() {
                 <td className="pr-4 text-xs text-muted">{ago(t.created_at)}</td>
               </tr>))}</tbody>
           </table>
-        </Card>)}
+        </Card>
+        </>)}
       <Modal open={open} onClose={close} title={created ? "Client created" : "New client"}>
         {created ? (
           <div className="space-y-4">

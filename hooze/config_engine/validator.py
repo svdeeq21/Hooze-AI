@@ -72,6 +72,8 @@ def validate(bc: BusinessConfig) -> ValidationReport:
         check(bc.booking.enabled, "booking.enabled", "Enable booking so interested customers can request a visit/appointment.", "booking.enabled")
         priced = [o for o in bc.offerings if o.price_minor is not None or o.price_note or "price" in o.details]
         check(not bc.offerings or bool(priced), "offerings.price", "None of your offerings show a price; customers will be told it's on request.", "offerings.price", blocking=False)
+    if bc.communication.mode == "after_hours":
+        check(bool(bc.hours), "hours.after_hours", "After-hours mode needs your opening hours, so the assistant knows when to stay quiet.", "hours")
     check(bc.integrations.channel_connected, "integrations.channel", "WhatsApp channel is not connected yet.", "integrations.channel_connected")
 
     if goal:                                   # the compiled playbook must itself be sane

@@ -12,16 +12,21 @@ from typing import Optional
 
 class Messenger:
     def __init__(self, *, adapter, store, to: str, conversation_id: str, tenant_id: str, events, trace_id: str,
-                 delay_range: tuple[float, float] = (1.0, 2.5), sleep=asyncio.sleep):
+                 delay_range: tuple[float, float] = (1.0, 2.5), sleep=asyncio.sleep, drafts=None):
         self.adapter, self.store, self.to, self.conversation_id = adapter, store, to, conversation_id
         self.tenant_id, self.events, self.trace_id = tenant_id, events, trace_id
         self.delay_range, self._sleep = delay_range, sleep
+        self.drafts = drafts                 # assist mode (runtime/drafts.py): every message waits for a person instead of being sent
         self.sent: list[str] = []
 
     async def text(self, text: str, *, meta: Optional[dict] = None, typing: bool = True) -> bool:
         text = (text or "").strip()
         if not text:
             return False
+        if self.drafts is not None:
+            await self.drafts.text(text)
+            self.sent.append(text)
+            return True
         delay = random.uniform(*self.delay_range) if typing and self.delay_range[1] > 0 else 0.0
         # ONE wait, owned by the provider: Evolution shows the "typing…" presence for `delay` and then sends. This used to ALSO sleep here for
         # the same time first, so every message waited twice (the real logs: 3.5-7s per send) and the first wait showed no typing at all.
@@ -36,6 +41,8 @@ class Messenger:
     async def hold(self, text: str) -> bool:
         """A holding message ("one moment…"). Recorded as `system`, NOT `bot`: it must never count as the answer, or a replay after an
         outage would see "already replied" and never send the real one."""
+        if self.drafts is not None:
+            return False                     # a person approves every reply in assist mode: "one moment" would only clutter their queue
         await self.adapter.send_text(self.to, text, typing_delay=0.0)
         self.sent.append(text)
         try:
@@ -45,6 +52,9 @@ class Messenger:
         return True
 
     async def media(self, url: str, media_type: str, caption: str = "") -> bool:
+        if self.drafts is not None:
+            await self.drafts.media(url, media_type, caption)
+            return True
         await self.adapter.send_media(self.to, url, media_type, caption)
         try:
             await self.store.record_outbound(self.conversation_id, f"[{media_type}] {caption}".strip(), "bot", {"media_url": url})

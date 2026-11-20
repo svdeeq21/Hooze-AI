@@ -25,7 +25,10 @@ class PaystackProvider:
     def _h(self) -> dict:
         return {"Authorization": f"Bearer {self.secret}", "Content-Type": "application/json"}
 
-    @with_retry(max_attempts=3, base_delay=1.5)
+    # Retried ONLY when the request provably never reached Paystack (could not connect). A read timeout or 5xx is ambiguous: Paystack may
+    # have accepted the reference, and re-sending the SAME reference is then refused as a duplicate, so the retry turned a slow success into
+    # a failed checkout (after 4.5s of sleeping inside the customer's turn). The customer simply asks to pay again; that uses a new reference.
+    @with_retry(max_attempts=3, base_delay=1.5, exceptions=(httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
     async def initialize(self, *, reference, amount_minor, currency, phone, metadata) -> dict:
         digits = "".join(c for c in phone if c.isdigit()) or "guest"
         payload = {"email": f"wa{digits}@{self.email_domain}", "amount": int(amount_minor), "currency": currency, "reference": reference, "metadata": metadata}
@@ -43,7 +46,7 @@ class PaystackProvider:
         if r.status_code != 200:
             raise RuntimeError(f"Paystack verify failed ({r.status_code}): {r.text[:200]}")
         d = r.json()["data"]
-        return {"status": d.get("status"), "amount_minor": int(d.get("amount", 0))}
+        return {"status": d.get("status"), "amount_minor": int(d.get("amount", 0)), "currency": (d.get("currency") or "").upper()}
 
     def verify_signature(self, headers: dict, body: bytes) -> bool:
         sig = {k.lower(): v for k, v in headers.items()}.get("x-paystack-signature", "")

@@ -385,6 +385,12 @@ class OrderingCapability(Capability):
         if int(verified.get("amount_minor", -1)) != int(pay["amount_minor"]):
             await self.ctx.events.error("PAYMENT_AMOUNT_MISMATCH", tenant_id=self.ctx.tenant_id, reference=reference, expected=pay["amount_minor"], got=verified.get("amount_minor"))
             return None
+        # 3,500 USD cents is not 3,500 kobo. Compare the currency too whenever the provider reports one.
+        got_cur, want_cur = (verified.get("currency") or "").upper(), (pay.get("currency") or "").upper()
+        if got_cur and want_cur and got_cur != want_cur:
+            await self.ctx.events.error("PAYMENT_AMOUNT_MISMATCH", tenant_id=self.ctx.tenant_id, reference=reference, expected=f"{pay['amount_minor']} {want_cur}",
+                                        got=f"{verified.get('amount_minor')} {got_cur}")
+            return None
         # Two writes that can never be one transaction here, so they are ORDERED to be self-healing. Provider retries (we answer 5xx on any
         # failure) re-run both steps, and each step is idempotent:
         #   1. record the verified payment as `success` (conditional on it not being success already; `claimed` = this call did it).

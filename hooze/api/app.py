@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from hooze.api import admin, internal, operator, webhooks
+from hooze.api import admin, internal, operator, webchat, webhooks
 from hooze.api.deps import Container, build_container
 from hooze.settings import get_settings
 
@@ -34,11 +34,24 @@ def create_app(container: Optional[Container] = None) -> FastAPI:
     app = FastAPI(title="Hooze Platform", version="0.1.0", lifespan=None if container else lifespan, docs_url=None if get_settings().is_production else "/docs")
     if container:
         app.state.container = container
-    origins = [o.strip().rstrip("/") for o in (container.settings if container else get_settings()).cors_allowed_origins.split(",") if o.strip()]
-    if origins:     # an ALLOW-LIST, never "*" (audit M12). Only the dashboard's own origin(s) may call the API from a browser.
-        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], max_age=600,
+    # An ALLOW-LIST, never "*" (audit M12). This was only a comment: CORS_ALLOWED_ORIGINS=* used to switch the wildcard on. Now it is dropped.
+    origins = [o for o in (o.strip().rstrip("/") for o in (container.settings if container else get_settings()).cors_allowed_origins.split(",")) if o and o != "*"]
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        h = response.headers
+        h.setdefault("X-Content-Type-Options", "nosniff")
+        h.setdefault("X-Frame-Options", "DENY")
+        h.setdefault("Referrer-Policy", "no-referrer")
+        if request.url.path.startswith("/v1/") and "cache-control" not in h:
+            h["Cache-Control"] = "no-store"          # customer conversations, phone numbers and orders must never sit in a proxy or browser cache
+        return response
+
+    if origins:     # Only the dashboard's own origin(s) may call the API from a browser.
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], max_age=600,
                            allow_headers=["x-api-key", "content-type", "ngrok-skip-browser-warning"])
-    for r in (webhooks.router, operator.router, admin.router, internal.router):     # operator BEFORE admin: literal paths beat `{action}`
+    for r in (webhooks.router, webchat.router, operator.router, admin.router, internal.router):     # operator BEFORE admin: literal paths beat `{action}`
         app.include_router(r)
 
     @app.get("/health")

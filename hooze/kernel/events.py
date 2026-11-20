@@ -10,6 +10,8 @@ import json, logging, sys
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
+from hooze.kernel import capture
+
 _log = logging.getLogger("hooze")
 if not _log.handlers:
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(message)s")
@@ -56,6 +58,9 @@ class EventBus:
         e = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, "severity": severity,
              "tenant_id": tenant_id, "ref_type": ref_type, "ref_id": ref_id and str(ref_id),
              "trace_id": trace_id, "metadata": metadata}
+        cap = capture.active()
+        if cap is not None:
+            cap["events"].append(e)                 # the web test chat shows the turn's steps to the person testing it
         for sink in self.sinks:
             try:
                 await sink(e)

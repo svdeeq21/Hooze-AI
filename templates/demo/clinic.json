@@ -1,0 +1,38 @@
+{
+  "identity": {
+    "name": "BrightSmile Dental Clinic",
+    "industry": "dental clinic",
+    "description": "Family dental clinic offering check-ups, cleaning, whitening, fillings and orthodontic consultations.",
+    "website": "https://example.com/brightsmile",
+    "address": "7 Ademola Adetokunbo Street, Victoria Island, Lagos",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Emergency line": "Call the clinic directly for emergencies (demo)", "Clinic hours": "Mon-Fri 8am-6pm, Sat 9am-2pm"}
+  },
+  "offerings": [
+    {"name": "Check-up & Consultation", "category": "General", "description": "Full oral examination with a dentist and a treatment plan", "price_minor": 1500000},
+    {"name": "Scaling & Polishing", "category": "General", "description": "Professional cleaning to remove plaque and stains", "price_minor": 2500000},
+    {"name": "Teeth Whitening", "category": "Cosmetic", "description": "In-clinic whitening session (about 60 minutes)", "price_minor": 12000000},
+    {"name": "Tooth-coloured Filling", "category": "Treatment", "description": "Composite filling for a cavity", "price_minor": 3500000, "price_note": "from"},
+    {"name": "Braces Consultation", "category": "Orthodontics", "description": "Assessment for braces or clear aligners with an orthodontist", "price_minor": 2000000}
+  ],
+  "faqs": [
+    {"question": "Do you accept HMO?", "answer": "We accept selected HMOs. Please share your HMO name and our front desk will confirm cover before your visit."},
+    {"question": "Do you treat children?", "answer": "Yes, we see patients of all ages, including children from 3 years old."},
+    {"question": "Is whitening safe?", "answer": "Whitening is done by a dentist after a check-up confirms it is suitable for you."}
+  ],
+  "qualification_slots": [
+    {"name": "service", "label": "Service needed", "type": "text", "ask": "Which treatment or service are you interested in?"},
+    {"name": "patient", "label": "Patient", "type": "enum", "values": ["adult", "child"], "ask": "Is the appointment for an adult or a child?"},
+    {"name": "hmo", "label": "HMO", "type": "text", "required": false}
+  ],
+  "sales_process": {"goal": "consult_and_book", "notes": "Book an appointment; never diagnose."},
+  "booking": {"enabled": true, "subject_label": "appointment"},
+  "handoff": {"contact_name": "our front desk", "staff_phones": ["2348000000003"]},
+  "communication": {
+    "tone": "calm, caring and clear",
+    "greeting": "Hello, thank you for contacting BrightSmile Dental 😊 How can we help you today?",
+    "rules": ["If someone describes severe pain, swelling or bleeding, tell them to call the clinic now and hand over to a person.", "Never give medical advice or a diagnosis."]
+  },
+  "restrictions": {"never_say": ["painless guaranteed", "permanent results"], "prohibited_claims": ["diagnosis", "cure"]}
+}

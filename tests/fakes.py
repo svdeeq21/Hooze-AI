@@ -27,6 +27,8 @@ UNIQUES: dict[str, list[tuple[tuple, Optional[Callable]]]] = {
     "channels": [(("kind", "instance_name"), None)],
     "availability": [(("tenant_id",), None)],
     "inbound_events": [(("channel_id", "provider_message_id"), lambda r: r.get("provider_message_id") is not None)],
+    "demo_links": [(("token_hash",), None)],
+    "report_log": [(("tenant_id", "kind", "period"), None)],
 }
 
 

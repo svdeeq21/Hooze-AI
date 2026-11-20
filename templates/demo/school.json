@@ -1,0 +1,39 @@
+{
+  "identity": {
+    "name": "Greenfield Academy",
+    "industry": "private school (nursery, primary, secondary)",
+    "description": "Day school in Port Harcourt offering Nigerian and British curricula from Nursery 1 to SS3.",
+    "website": "https://example.com/greenfield",
+    "address": "15 Peter Odili Road, Port Harcourt",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Admissions office": "Mon-Fri, 8am-4pm", "Prospectus": "https://example.com/greenfield/prospectus.pdf"}
+  },
+  "offerings": [
+    {"name": "Nursery (Nursery 1-2)", "category": "Admissions", "description": "Play-based early years programme, ages 2-4", "price_minor": 45000000, "price_note": "per term",
+     "details": {"ages": "2-4", "tuition": "₦450,000 per term"}},
+    {"name": "Primary (Year 1-6)", "category": "Admissions", "description": "Blended Nigerian and British curriculum, ages 5-11", "price_minor": 65000000, "price_note": "per term",
+     "details": {"ages": "5-11", "tuition": "₦650,000 per term"}},
+    {"name": "Secondary (JSS1-SS3)", "category": "Admissions", "description": "WAEC, NECO and IGCSE preparation, ages 11-17", "price_minor": 85000000, "price_note": "per term",
+     "details": {"ages": "11-17", "tuition": "₦850,000 per term"}}
+  ],
+  "faqs": [
+    {"question": "Is there an entrance exam?", "answer": "Yes, for Primary 2 upwards. It covers English and Mathematics and is taken on the school tour day."},
+    {"question": "Do you provide school bus?", "answer": "Yes, on routes within Port Harcourt city. The cost depends on the route and is confirmed by the admissions office."},
+    {"question": "When does the next term start?", "answer": "The admissions office will confirm the next resumption date when you book a visit."}
+  ],
+  "qualification_slots": [
+    {"name": "child_age", "label": "Child's age", "type": "number", "ask": "How old is your child?"},
+    {"name": "class", "label": "Class applying for", "type": "text", "ask": "Which class would they be joining?"},
+    {"name": "start", "label": "Preferred start", "type": "text", "required": false}
+  ],
+  "sales_process": {"goal": "consult_and_book", "notes": "Every enquiry should end with a booked school tour."},
+  "booking": {"enabled": true, "subject_label": "school tour"},
+  "handoff": {"contact_name": "Mrs. Ada from admissions", "staff_phones": ["2348000000005"]},
+  "communication": {
+    "tone": "warm, respectful and reassuring to parents",
+    "greeting": "Good day, and thank you for your interest in Greenfield Academy 🎓 Which class are you enquiring about?",
+    "rules": ["Address parents respectfully.", "Never promise admission; admission depends on the assessment."]
+  },
+  "restrictions": {"never_say": ["guaranteed admission", "scholarship available"], "prohibited_claims": ["best school in Nigeria"]}
+}

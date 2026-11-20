@@ -54,6 +54,7 @@ def compile_config(bc: BusinessConfig, version: int = 1) -> Compiled:
         timezone=idt.timezone, currency=idt.currency, capabilities=caps, playbook=pack.playbook, intents=pack.intents,
         staff_numbers=[n for n in (normalize_phone(p) for p in bc.handoff.staff_phones) if n],
         first_contact_message=bc.communication.greeting or None,
+        mode=bc.communication.mode, hours=dict(bc.hours),
     )
 
     docs: list[KnowledgeDoc] = []

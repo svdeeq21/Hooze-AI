@@ -1,5 +1,6 @@
 """Platform + tenant admin API (the backend of the future Hooze dashboard / Control Center)."""
 from __future__ import annotations
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
@@ -65,14 +66,29 @@ async def create_channel(tenant_id: str, body: ChannelIn, request: Request):
 
 # ── tenant: config lifecycle ────────────────────────────────────
 async def _with_real_integration_flags(c, tenant_id: str, bc: BusinessConfig) -> BusinessConfig:
-    """Never trust client-supplied 'connected' flags: derive them from actual database state."""
+    """Never trust client-supplied 'connected' flags: derive them from actual database state.
+
+    A client with the web test channel enabled (and no WhatsApp number yet) can go live for the TEST CHAT and DEMO LINKS only. Payments
+    there are simulated, so a Paystack key is not required until a real WhatsApp number is connected."""
     ch = (await c.pdb.table("channels").select("id").eq("tenant_id", tenant_id).eq("status", "active").limit(1).execute()).data
+    web = (await c.pdb.table("channels").select("id").eq("tenant_id", tenant_id).eq("kind", "web_demo").limit(1).execute()).data
     pay = (await c.pdb.table("tenant_integrations").select("id").eq("tenant_id", tenant_id).eq("status", "active").limit(1).execute()).data
-    bc.integrations.channel_connected = bool(ch)
-    bc.integrations.payments_connected = bool(pay)
+    bc.integrations.channel_connected = bool(ch) or bool(web)
+    bc.integrations.payments_connected = bool(pay) or (bool(web) and not ch)
     if pay and not bc.integrations.payments:
         bc.integrations.payments = "paystack"
     return bc
+
+
+async def _report(c, tenant_id: str, bc: BusinessConfig) -> dict:
+    """The readiness report, plus a plain warning when the client can only be reached on the web test chat (no WhatsApp number yet)."""
+    out = validate(await _with_real_integration_flags(c, tenant_id, bc)).to_dict()
+    wa = (await c.pdb.table("channels").select("id").eq("tenant_id", tenant_id).eq("status", "active").limit(1).execute()).data
+    if not wa and bc.integrations.channel_connected:
+        out["warnings"].append({"code": "integrations.whatsapp", "field": "integrations.channel_connected",
+                                "message": "No WhatsApp number is paired yet. Going live now works for the test chat and demo links only; "
+                                           "real customers can't reach the assistant until you pair a number."})
+    return out
 
 
 def _parse_or_422(raw: dict) -> tuple[BusinessConfig, list[str]]:
@@ -108,7 +124,7 @@ async def save_draft(tenant_id: str, request: Request, raw: dict = Body(...)):
     The current readiness report is stored alongside it so the UI (or an AI interview) can show what is still missing."""
     c = get_container(request)
     bc, fixes = _parse_or_422(raw)
-    report = validate(await _with_real_integration_flags(c, tenant_id, bc)).to_dict()
+    report = await _report(c, tenant_id, bc)
     db = c.pdb.for_tenant(tenant_id)
     fields = {"config": bc.model_dump(mode="json"), "validation_report": report, "updated_at": c.clock().isoformat()}
     existing = await _draft_row(db)
@@ -132,7 +148,7 @@ async def discard_draft(tenant_id: str, request: Request):
 async def validate_config(tenant_id: str, request: Request, raw: dict = Body(...)):
     c = get_container(request)
     bc, fixes = _parse_or_422(raw)
-    out = validate(await _with_real_integration_flags(c, tenant_id, bc)).to_dict()
+    out = await _report(c, tenant_id, bc)
     if fixes:
         out["normalized"] = fixes          # what we repaired, so the UI can show it
     return out
@@ -243,15 +259,31 @@ async def decline_booking(tenant_id: str, booking_id: str, request: Request, bod
 
 @router.get("/v1/tenants/{tenant_id}/usage", dependencies=[Depends(require_tenant)])
 async def usage(tenant_id: str, request: Request, since: Optional[str] = None):
-    """Per-tenant metered usage: what a billing job (or the customer's dashboard) reads. `since` is an ISO timestamp."""
+    """Per-tenant metered usage: what a billing job (or the customer's dashboard) reads. `since` is an ISO timestamp.
+
+    Totals are exact. This used to fetch every row in one request, and Supabase returns at most 1,000 rows per request, so any client
+    past 1,000 messages (or AI calls) was silently UNDER-counted — the number a bill would have been based on."""
+    if since:
+        try:
+            datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(422, "`since` must be an ISO-8601 date or datetime, e.g. 2026-11-01")
     db = get_container(request).pdb.for_tenant(tenant_id)
-    def q(t, *cols):
-        b = db.table(t).select(*cols)
-        return b.gte("created_at", since) if since else b
     totals: dict[str, float] = {}
-    for r in (await q("usage_events", "kind, quantity").execute()).data or []:
-        totals[r["kind"]] = totals.get(r["kind"], 0) + float(r["quantity"])
-    msgs = (await q("messages", "direction, sender_type").execute()).data or []
+    page = 1000
+    for start in range(0, page * 500, page):                    # pages through up to 500k usage rows
+        b = db.table("usage_events").select("kind, quantity")      # oldest first: rows written while paging land at the end, not mid-page
+        rows = (await (b.gte("created_at", since) if since else b).order("created_at").range(start, start + page - 1).execute()).data or []
+        for r in rows:
+            totals[r["kind"]] = totals.get(r["kind"], 0) + float(r["quantity"])
+        if len(rows) < page:
+            break
+
+    async def n_messages(**eq) -> int:
+        b = db.table("messages").select("id", count="exact")
+        for k, v in eq.items():
+            b = b.eq(k, v)
+        return int((await (b.gte("created_at", since) if since else b).limit(1).execute()).count or 0)
     return {"since": since, "metered": totals,
-            "messages_in": sum(1 for m in msgs if m["direction"] == "inbound"),
-            "messages_out_bot": sum(1 for m in msgs if m["direction"] == "outbound" and m["sender_type"] == "bot")}
+            "messages_in": await n_messages(direction="inbound"),
+            "messages_out_bot": await n_messages(direction="outbound", sender_type="bot")}

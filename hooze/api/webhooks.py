@@ -12,11 +12,29 @@ from hooze.runtime.tenant_runtime import build_tenant_runtime
 router = APIRouter()
 
 
+PAYMENT_WEBHOOK_MAX_BYTES = 1_000_000          # Paystack events are a few KB
+
+
 def _uuid_or_404(v: str) -> str:
     try:
         return str(uuid.UUID(v))
     except ValueError:
         raise HTTPException(404, "not found")
+
+
+async def read_limited(request: Request, limit: int) -> bytes:
+    """The raw body, refusing (413) anything over `limit` WITHOUT buffering it all first. These routes are reachable by anyone on the
+    internet; an unbounded body (a multi-GB upload to a valid webhook URL) could otherwise exhaust the server's memory."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, "payload too large")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(413, "payload too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/v1/webhooks/whatsapp/{channel_id}")
@@ -25,10 +43,13 @@ async def whatsapp_webhook(channel_id: str, request: Request, background: Backgr
     channel = first(await c.pdb.table("channels").select("*").eq("id", _uuid_or_404(channel_id)).limit(1).execute())
     if not channel or channel["status"] != "active":
         raise HTTPException(404, "not found")
+    raw = await read_limited(request, int(getattr(c.settings, "webhook_max_bytes", 5_000_000) or 5_000_000))
     try:
-        body = await request.json()
+        body = json.loads(raw)
     except Exception:
         raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "invalid JSON")             # a list/string body used to crash with a 500 inside verify()
     adapter = c.adapters.for_channel(channel)
     provided = request.headers.get("x-hooze-secret")
     if not provided and token:
@@ -65,7 +86,7 @@ async def payment_webhook(tenant_id: str, provider: str, request: Request):
     retries. The conditional-UPDATE guard in ordering.confirm_payment makes retries exactly-once safe."""
     c = get_container(request)
     tenant_id = _uuid_or_404(tenant_id)
-    raw = await request.body()
+    raw = await read_limited(request, PAYMENT_WEBHOOK_MAX_BYTES)
     try:
         prov = await c.payments_for(tenant_id)
     except LookupError:

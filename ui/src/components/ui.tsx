@@ -6,7 +6,7 @@ import { cx } from "../lib/util";
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" | "subtle"; size?: "sm" | "md"; busy?: boolean };
 export function Button({ variant = "subtle", size = "md", busy, className, children, disabled, ...p }: BtnProps) {
   const v = {
-    primary: "bg-amber text-ink hover:bg-amber-dim font-medium",
+    primary: "bg-amber text-on-amber hover:bg-amber-dim font-medium",
     subtle: "bg-raised text-text hover:bg-line border border-line",
     ghost: "text-muted hover:text-text hover:bg-raised",
     danger: "bg-bad/10 text-bad border border-bad/30 hover:bg-bad/20",
@@ -140,7 +140,7 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: 
       {tabs.map((t) => (
         <button key={t.id} onClick={() => onChange(t.id)}
           className={cx("relative whitespace-nowrap px-3.5 py-2.5 text-sm transition cursor-pointer", value === t.id ? "text-amber" : "text-muted hover:text-text")}>
-          {t.label}{!!t.badge && <span className="ml-1.5 rounded-full bg-amber px-1.5 py-0.5 text-[10px] font-semibold text-ink">{t.badge}</span>}
+          {t.label}{!!t.badge && <span className="ml-1.5 rounded-full bg-amber px-1.5 py-0.5 text-[10px] font-semibold text-on-amber">{t.badge}</span>}
           {value === t.id && <motion.span layoutId="tab-underline" className="absolute inset-x-0 -bottom-px h-0.5 bg-amber" />}
         </button>
       ))}

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { api } from "../lib/api";
-import { ErrorBox, Loading, StatusBadge, Tabs } from "../components/ui";
+import { Badge, ErrorBox, Loading, StatusBadge, Tabs } from "../components/ui";
 import OverviewTab from "./OverviewTab";
 import SetupTab from "./SetupTab";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -13,6 +13,7 @@ import OrdersTab from "./OrdersTab";
 import MenuTab from "./MenuTab";
 import PaymentsTab from "./PaymentsTab";
 import SettingsTab from "./SettingsTab";
+import TestChatTab from "./TestChatTab";
 
 const route = getRouteApi("/clients/$tenantId");
 
@@ -23,12 +24,14 @@ export default function ClientPage() {
   const q = useQuery({ queryKey: ["tenant", tenantId], queryFn: () => api.tenant(tenantId), refetchInterval: 20000 });
   const stats = useQuery({ queryKey: ["stats", tenantId], queryFn: () => api.stats(tenantId), refetchInterval: 15000 });
 
+  const mode = q.data?.active_config?.config.communication.mode ?? "full_auto";
+  const drafts = useQuery({ queryKey: ["drafts", tenantId], queryFn: () => api.drafts(tenantId), refetchInterval: 15000, enabled: mode === "assist" });
   const goal = q.data?.active_config?.config.sales_process.goal;
   const hasBooking = !!q.data?.active_config && (goal === "consult_and_book" || q.data.active_config.config.booking.enabled);
   const tabs = useMemo(() => {
     const t: { id: string; label: string; badge?: number }[] = [
-      { id: "overview", label: "Overview" }, { id: "setup", label: "Setup" }, { id: "whatsapp", label: "WhatsApp" },
-      { id: "conversations", label: "Conversations", badge: stats.data?.conversations.handoff || undefined },
+      { id: "overview", label: "Overview" }, { id: "setup", label: "Setup" }, { id: "test", label: "Test chat" }, { id: "whatsapp", label: "WhatsApp" },
+      { id: "conversations", label: "Conversations", badge: ((stats.data?.conversations.handoff ?? 0) + (drafts.data?.length ?? 0)) || undefined },
     ];
     if (hasBooking) t.push({ id: "bookings", label: "Bookings", badge: stats.data?.bookings.pending || undefined });
     if (goal === "order") t.push({ id: "orders", label: "Orders", badge: stats.data?.orders.PAID || undefined }, { id: "menu", label: "Menu" });
@@ -37,7 +40,7 @@ export default function ClientPage() {
     t.push({ id: "payments", label: "Payments" });
     t.push({ id: "settings", label: "Settings" });
     return t;
-  }, [hasBooking, goal, stats.data]);
+  }, [hasBooking, goal, stats.data, drafts.data]);
 
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorBox error={q.error} retry={() => q.refetch()} />;
@@ -46,10 +49,13 @@ export default function ClientPage() {
   return (
     <>
       <div className="mb-1 text-xs text-muted"><Link to="/clients" className="hover:text-amber">Clients</Link> / {d.tenant.name}</div>
-      <div className="mb-5 flex items-center gap-3"><h1 className="font-display text-2xl font-bold">{d.tenant.name}</h1><StatusBadge status={d.tenant.status} /></div>
+      <div className="mb-5 flex flex-wrap items-center gap-2"><h1 className="mr-1 font-display text-2xl font-bold">{d.tenant.name}</h1><StatusBadge status={d.tenant.status} />
+        {d.active_config && <Badge tone="mute">{goal === "order" ? "orders & payments" : "enquiries & bookings"}</Badge>}
+        {d.active_config && <Badge tone={mode === "full_auto" ? "ok" : "warn"}>{{ full_auto: "full auto", after_hours: "after-hours", assist: "assist: you approve replies" }[mode]}</Badge>}</div>
       <Tabs tabs={tabs} value={current} onChange={(t) => nav({ to: "/clients/$tenantId", params: { tenantId }, search: { tab: t } })} />
       {current === "overview" && <OverviewTab id={tenantId} detail={d} stats={stats.data} go={(t) => nav({ to: "/clients/$tenantId", params: { tenantId }, search: { tab: t } })} />}
       {current === "setup" && <ErrorBoundary label="The Setup tab" resetKey={tenantId}><SetupTab id={tenantId} detail={d} go={(t) => nav({ to: "/clients/$tenantId", params: { tenantId }, search: { tab: t } })} /></ErrorBoundary>}
+      {current === "test" && <TestChatTab id={tenantId} detail={d} go={(t) => nav({ to: "/clients/$tenantId", params: { tenantId }, search: { tab: t } })} />}
       {current === "whatsapp" && <WhatsAppTab id={tenantId} detail={d} />}
       {current === "conversations" && <ConversationsTab id={tenantId} />}
       {current === "bookings" && <BookingsTab id={tenantId} tz={d.active_config?.config.identity.timezone ?? "Africa/Lagos"} />}

@@ -1,0 +1,37 @@
+{
+  "identity": {
+    "name": "Glow Studio",
+    "industry": "hair & beauty salon",
+    "description": "Hair, nails and make-up studio in Ikeja. Walk-ins welcome; appointments get priority.",
+    "website": "https://example.com/glowstudio",
+    "address": "22 Allen Avenue, Ikeja, Lagos",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Instagram": "@glowstudio (demo)", "Booking deposit": "₦5,000 for bridal bookings, paid at the studio"}
+  },
+  "offerings": [
+    {"name": "Knotless Braids (medium)", "category": "Hair", "description": "Medium knotless braids, waist length. Hair extensions included", "price_minor": 3500000},
+    {"name": "Silk Press", "category": "Hair", "description": "Wash, deep condition and silk press on natural hair", "price_minor": 1800000},
+    {"name": "Gel Manicure", "category": "Nails", "description": "Gel polish manicure with cuticle care", "price_minor": 800000},
+    {"name": "Acrylic Full Set", "category": "Nails", "description": "Acrylic extensions with gel colour", "price_minor": 1500000},
+    {"name": "Bridal Make-up", "category": "Make-up", "description": "Bridal make-up with trial session and lashes", "price_minor": 9000000, "price_note": "from"}
+  ],
+  "faqs": [
+    {"question": "Do you take walk-ins?", "answer": "Yes, but appointments are served first, so booking guarantees your slot."},
+    {"question": "How long do knotless braids take?", "answer": "Medium knotless braids take about 5 to 6 hours."},
+    {"question": "Do you do home service?", "answer": "Home service is available for bridal and event make-up only, at an extra fee confirmed by our team."}
+  ],
+  "qualification_slots": [
+    {"name": "service", "label": "Service", "type": "text", "ask": "Which service would you like?"},
+    {"name": "occasion", "label": "Occasion", "type": "text", "required": false}
+  ],
+  "sales_process": {"goal": "consult_and_book", "notes": "Help them pick a service, then book a slot."},
+  "booking": {"enabled": true, "subject_label": "appointment"},
+  "handoff": {"contact_name": "Bisi, the studio manager", "staff_phones": ["2348000000004"]},
+  "communication": {
+    "tone": "bubbly, warm and confident",
+    "greeting": "Hey lovely! ✨ Welcome to Glow Studio. What are we doing for you — hair, nails or make-up?",
+    "rules": ["Mention how long a service takes when they ask about it."]
+  },
+  "restrictions": {"never_say": ["free", "discount"], "prohibited_claims": ["hair growth guaranteed"]}
+}

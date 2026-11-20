@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-/* Hooze brand: amber on near-black, Syne headings, Outfit body (locked brand decision) */
+/* Hooze brand: amber on near-black, Syne headings, Outfit body (locked brand decision).
+   Dark is the default. A light theme follows the device setting, or the theme switch in the sidebar (data-theme on <html>). */
 @theme {
   --color-ink: #0e0e0f;
   --color-panel: #161618;
@@ -8,16 +9,40 @@
   --color-line: #2a2a2e;
   --color-amber: #f5a623;
   --color-amber-dim: #c4841a;
+  --color-on-amber: #0e0e0f;
   --color-text: #ece8e1;
   --color-muted: #8d8a85;
   --color-ok: #3ecf8e;
   --color-bad: #ef5b5b;
   --color-warn: #f5a623;
+  --color-chat: #121110;
+  --color-bubble-out: #1d4d3c;
   --font-display: "Syne", system-ui, sans-serif;
   --font-sans: "Outfit", system-ui, sans-serif;
 }
+
+/* light: warm paper, ink text, a deeper amber so amber text stays readable on white */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --color-ink: #f6f3ee; --color-panel: #ffffff; --color-raised: #f0ebe3; --color-line: #e2dbcf;
+    --color-amber: #b86e00; --color-amber-dim: #9a5c00; --color-on-amber: #ffffff;
+    --color-text: #1b1a19; --color-muted: #6b665e; --color-ok: #1d8a56; --color-bad: #c63a2f; --color-warn: #a86300;
+    --color-chat: #ede6da; --color-bubble-out: #d4f1cf;
+  }
+}
+:root[data-theme="light"] {
+  --color-ink: #f6f3ee; --color-panel: #ffffff; --color-raised: #f0ebe3; --color-line: #e2dbcf;
+  --color-amber: #b86e00; --color-amber-dim: #9a5c00; --color-on-amber: #ffffff;
+  --color-text: #1b1a19; --color-muted: #6b665e; --color-ok: #1d8a56; --color-bad: #c63a2f; --color-warn: #a86300;
+  --color-chat: #ede6da; --color-bubble-out: #d4f1cf;
+}
+
 html, body, #root { height: 100%; }
 body { background: var(--color-ink); color: var(--color-text); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
 ::selection { background: color-mix(in srgb, var(--color-amber) 35%, transparent); }
 * { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
-input, select, textarea { color-scheme: dark; }
+:root { color-scheme: dark; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { color-scheme: light; } }
+:root[data-theme="light"] { color-scheme: light; }
+:focus-visible { outline: 2px solid var(--color-amber); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

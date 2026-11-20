@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 # Tables that are NOT scoped by tenant_id. Everything else is.
-GLOBAL_TABLES = frozenset({"tenants", "channels", "api_keys"})
+GLOBAL_TABLES = frozenset({"tenants", "channels", "api_keys", "demo_links"})   # demo_links: looked up by token before the tenant is known
 
 
 class TenantScopeError(RuntimeError):

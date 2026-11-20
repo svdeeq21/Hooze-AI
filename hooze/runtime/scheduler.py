@@ -6,19 +6,20 @@ One tenant's failure never stops the others.
 """
 from __future__ import annotations
 from hooze.kernel.locks import try_lock
+from hooze.reports import maybe_send_weekly
 from hooze.runtime.tenant_runtime import build_tenant_runtime
 
 
-async def run_tick(*, pdb, configs, adapters, events, llm, clock, extras_for) -> dict:
+async def run_tick(*, pdb, configs, adapters, events, llm, clock, extras_for, weekly_reports: bool = False) -> dict:
     """One sweep for all tenants. Overlapping sweeps (slow tenant + a cron that fires again) are refused, not queued."""
     async with try_lock("internal-tick") as lock:
         if not lock.acquired:
             await events.warn("TICK_SKIPPED_OVERLAP")
             return {"status": "already_running", "tenants": 0, "results": {}}
-        return await _sweep(pdb=pdb, configs=configs, adapters=adapters, events=events, llm=llm, clock=clock, extras_for=extras_for)
+        return await _sweep(pdb=pdb, configs=configs, adapters=adapters, events=events, llm=llm, clock=clock, extras_for=extras_for, weekly_reports=weekly_reports)
 
 
-async def _sweep(*, pdb, configs, adapters, events, llm, clock, extras_for) -> dict:
+async def _sweep(*, pdb, configs, adapters, events, llm, clock, extras_for, weekly_reports: bool = False) -> dict:
     tenants = (await pdb.table("tenants").select("*").eq("status", "active").execute()).data or []
     out: dict = {}
     for t in tenants:
@@ -27,8 +28,10 @@ async def _sweep(*, pdb, configs, adapters, events, llm, clock, extras_for) -> d
             cfg = await configs.load_active(tid)
             if cfg is None:
                 continue
-            _, caps = build_tenant_runtime(pdb=pdb, adapters=adapters, events=events, llm=llm, cfg=cfg, tenant_id=tid, clock=clock, extras=extras_for(tid))
+            ctx, caps = build_tenant_runtime(pdb=pdb, adapters=adapters, events=events, llm=llm, cfg=cfg, tenant_id=tid, clock=clock, extras=extras_for(tid))
             out[tid] = {name: await cap.tick() for name, cap in caps.items()}
+            if weekly_reports:
+                out[tid]["weekly_report"] = await maybe_send_weekly(pdb=pdb, outbox=ctx.outbox, events=events, cfg=cfg, tenant=t, now=clock())
         except Exception as e:
             await events.error("TICK_FAILED", tenant_id=tid, error=str(e)[:200])
             out[tid] = {"error": str(e)[:200]}

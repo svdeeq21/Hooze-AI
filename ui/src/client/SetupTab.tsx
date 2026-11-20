@@ -7,6 +7,13 @@ import { MediaField } from "./MediaField";
 import { BulkMedia } from "./BulkMedia";
 import { fixTarget, groupBySection, type SectionId, type SectionIssue } from "../lib/readiness";
 import { Badge, Button, Card, Field, Input, Loading, Select, Textarea, Toggle, useToast } from "../components/ui";
+import type { Mode } from "../lib/api";
+
+const MODES: { id: Mode; label: string; hint: string }[] = [
+  { id: "full_auto", label: "Full auto", hint: "Answers every customer, takes orders and booking requests, and brings in a person when needed." },
+  { id: "after_hours", label: "After-hours", hint: "Your team answers while you're open; the assistant covers when you're closed. Uses your opening hours." },
+  { id: "assist", label: "Assist", hint: "The assistant writes each reply; someone on your team approves or edits it in Conversations before it's sent." },
+];
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // Every config (from the server OR pasted) is rebuilt from defaults, so the form never meets a missing field.
@@ -171,6 +178,21 @@ function Form({ id, initial, version, name, go, fromDraft, draftSavedAt, onDraft
               <option value="">Choose…</option><option value="order">Take orders and payments (food, products)</option><option value="consult_and_book">Answer questions and book visits / appointments</option></Select></Field>
           {goal === "consult_and_book" && <Field label="What are bookings called?" hint="e.g. inspection, appointment, consultation."><Input value={cfg.booking.subject_label} onChange={(e) => set((c) => { c.booking.subject_label = e.target.value; })} /></Field>}
           <Field label="Extra instructions for the sales process" className="md:col-span-2"><Textarea value={cfg.sales_process.notes} onChange={(e) => set((c) => { c.sales_process.notes = e.target.value; })} placeholder="e.g. Always mention the free delivery above ₦10,000." /></Field>
+          <div className="md:col-span-2">
+            <div className="mb-1 text-xs font-medium text-muted">How much the assistant does on its own</div>
+            <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Operating mode">
+              {MODES.map((m) => {
+                const on = (cfg.communication.mode ?? "full_auto") === m.id;
+                return (
+                  <button key={m.id} type="button" role="radio" aria-checked={on} onClick={() => set((c) => { c.communication.mode = m.id; })}
+                    className={`cursor-pointer rounded-xl border p-3 text-left transition ${on ? "border-amber bg-amber/10" : "border-line hover:border-muted"}`}>
+                    <div className="flex items-center justify-between gap-2 text-sm font-medium">{m.label}{on && <span className="text-amber">●</span>}</div>
+                    <div className="mt-1 text-xs text-muted">{m.hint}</div>
+                  </button>);
+              })}
+            </div>
+            {cfg.communication.mode === "after_hours" && Object.keys(cfg.hours).length === 0 && <p className="mt-2 text-xs text-bad">After-hours needs your opening hours (section 6).</p>}
+          </div>
         </div>
       </Section>
 

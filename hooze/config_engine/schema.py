@@ -73,6 +73,11 @@ class Communication(BaseModel):
     tone: str = "warm, brief and professional"
     greeting: str = ""
     rules: list[str] = Field(default_factory=list)
+    # How much the assistant does on its own:
+    #   full_auto   - answers every message (the default)
+    #   after_hours - answers only OUTSIDE `hours`; during opening hours your team answers on the phone as usual
+    #   assist      - writes every reply as a draft that a person approves (or edits) in the dashboard before it is sent
+    mode: Literal["full_auto", "after_hours", "assist"] = "full_auto"
 
 class Restrictions(BaseModel):
     never_say: list[str] = Field(default_factory=list)

@@ -218,6 +218,8 @@ async def delete_tenant(tenant_id: str, request: Request, confirm: str = ""):
     # A dead/unreachable Evolution server must not make deletion impossible, so failures are REPORTED (to remove by hand) rather than blocking.
     instances, failed = 0, []
     for ch in (await c.pdb.table("channels").select("*").eq("tenant_id", tenant_id).execute()).data or []:
+        if ch.get("kind") != "whatsapp_evolution":
+            continue                                   # the web test channel has no Evolution instance behind it
         try:
             key = c.vault.decrypt(ch["credentials_enc"]) if ch.get("credentials_enc") else ""
             await delete_evolution_instance((ch.get("config") or {}).get("base_url", ""), key, ch["instance_name"])
@@ -258,7 +260,8 @@ async def revoke_key(tenant_id: str, key_id: str, request: Request):
 async def run_tick_now(request: Request):
     """Same sweep as POST /internal/tick, behind the operator key so the dashboard can trigger it (dry-run unless a tenant's nudges are live)."""
     c = get_container(request)
-    out = await run_tick(pdb=c.pdb, configs=c.configs, adapters=c.adapters, events=c.events, llm=c.llm, clock=c.clock, extras_for=c.extras_for)
+    out = await run_tick(pdb=c.pdb, configs=c.configs, adapters=c.adapters, events=c.events, llm=c.llm, clock=c.clock, extras_for=c.extras_for,
+                         weekly_reports=getattr(c.settings, "weekly_report_enabled", False))
     if c.maintenance:
         out["maintenance"] = await c.maintenance.run_once()
     return out
@@ -612,8 +615,8 @@ async def upload_media(tenant_id: str, request: Request, file: UploadFile = File
     data = await file.read(cap + 1)                                   # never buffer more than the largest allowed file
     if len(data) > cap:
         raise HTTPException(413, f"That file is larger than {max(s.media_max_image_mb, s.media_max_video_mb)} MB.")
-    try:
-        out = process_media(data, max_image_mb=s.media_max_image_mb, max_video_mb=s.media_max_video_mb, max_px=s.media_image_max_px)
+    try:        # in a worker thread: decoding/resizing a 15 MB photo takes ~1-2s of CPU and used to freeze EVERY customer chat while it ran
+        out = await asyncio.to_thread(process_media, data, max_image_mb=s.media_max_image_mb, max_video_mb=s.media_max_video_mb, max_px=s.media_image_max_px)
     except MediaError as e:
         raise HTTPException(422, str(e))
     path = f"{tenant_id}/{uuid.uuid4().hex}.{out.ext}"

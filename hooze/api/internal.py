@@ -15,7 +15,8 @@ async def tick(request: Request, x_cron_secret: Optional[str] = Header(None)):
     expected = c.settings.internal_cron_secret
     if not expected or not x_cron_secret or not hmac.compare_digest(x_cron_secret, expected):     # fail closed if unset
         raise HTTPException(401, "unauthorized")
-    out = await run_tick(pdb=c.pdb, configs=c.configs, adapters=c.adapters, events=c.events, llm=c.llm, clock=c.clock, extras_for=c.extras_for)
+    out = await run_tick(pdb=c.pdb, configs=c.configs, adapters=c.adapters, events=c.events, llm=c.llm, clock=c.clock, extras_for=c.extras_for,
+                         weekly_reports=getattr(c.settings, "weekly_report_enabled", False))
     if c.maintenance:
         out["maintenance"] = await c.maintenance.run_once()           # an external cron can drive recovery too (belt and braces)
     return out

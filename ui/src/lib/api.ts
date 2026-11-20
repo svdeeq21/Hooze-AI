@@ -96,7 +96,7 @@ export interface BusinessConfig {
   booking: { enabled: boolean; subject_label: string };
   hours: Record<string, string[] | null>;
   handoff: { contact_name: string; staff_phones: string[]; human_request_patterns: string[] };
-  communication: { tone: string; greeting: string; rules: string[] };
+  communication: { tone: string; greeting: string; rules: string[]; mode: Mode };
   restrictions: { never_say: string[]; prohibited_claims: string[] };
   integrations: { payments: string | null; payments_connected: boolean; channel_connected: boolean };
 }
@@ -105,9 +105,26 @@ export const emptyConfig = (): BusinessConfig => ({
   identity: { name: "", industry: "", description: "", website: "", address: "", languages: ["English"], timezone: "Africa/Lagos", currency: "NGN", facts: {} },
   offerings: [], faqs: [], qualification_slots: [], stuck_after_user_messages: 14, sales_process: { goal: null, notes: "" },
   booking: { enabled: false, subject_label: "appointment" }, hours: { default: ["09:00", "18:00"] },
-  handoff: { contact_name: "", staff_phones: [], human_request_patterns: [] }, communication: { tone: "warm, brief and professional", greeting: "", rules: [] },
+  handoff: { contact_name: "", staff_phones: [], human_request_patterns: [] }, communication: { tone: "warm, brief and professional", greeting: "", rules: [], mode: "full_auto" },
   restrictions: { never_say: [], prohibited_claims: [] }, integrations: { payments: null, payments_connected: false, channel_connected: false },
 });
+
+export type Mode = "full_auto" | "after_hours" | "assist";
+
+// ── test chat / demo links / drafts / reports ─────────────────────────
+export interface ChatReply { type: string; text: string; url?: string }
+export interface ChatActivity { event: string; severity: string; tools?: string[]; from_state?: string; to_state?: string; intent?: string; reason?: string; provider?: string; timings?: Record<string, number> }
+export interface ChatState {
+  slots: Record<string, unknown>; stage: string | null; status: string | null; payment_due: boolean;
+  order: { id: string; status: string; subtotal_minor: number; fulfillment: string | null; address: string | null; items: { name: string; quantity: number; line_total_minor: number; options: string[] }[] } | null;
+  booking: { subject: string; when: string | null; status: string } | null;
+}
+export interface ChatTurn { status: string; replies: ChatReply[]; owner_alerts: string[]; activity: ChatActivity[]; state: ChatState; messages_left?: number }
+export interface ChatHistoryItem { from: "customer" | "assistant" | "team"; text: string; url?: string | null; at: string }
+export interface DemoLink { id: string; label: string; max_messages: number; used_messages: number; expires_at: string; revoked_at: string | null; created_at: string; token?: string }
+export interface Draft { id: string; conversation_id: string; contact_id: string | null; kind: "text" | "media"; content: string; media_url: string | null; media_type: string | null; created_at: string }
+export interface WeeklyReport { text: string; numbers: Record<string, number>; staff_numbers: number; automatic: boolean }
+export interface DemoInfo { business: string; description: string; goal: string | null; live: boolean; suggestions: string[]; messages_left: number; expires_at: string }
 
 const T = (id: string) => `/v1/tenants/${id}`;
 const PT = (id: string) => `/v1/platform/tenants/${id}`;
@@ -163,4 +180,35 @@ export const api = {
   integrations: (id: string) => get<{ integrations: Integration[] }>(`${T(id)}/integrations`).then((r) => r.integrations),
   connectPaystack: (id: string, secret_key: string, email_domain: string) => post<{ connected: boolean; webhook_url: string }>(`${T(id)}/integrations/paystack`, { secret_key, email_domain }),
   resetNudges: (id: string) => post<{ reset: number }>(`${T(id)}/nudges/reset`),
+  testChat: (id: string, session: string, text: string) => post<ChatTurn>(`${T(id)}/test-chat`, { session, text }),
+  testChatHistory: (id: string, session: string) => get<{ messages: ChatHistoryItem[]; state: ChatState }>(`${T(id)}/test-chat?session=${encodeURIComponent(session)}`),
+  testChatPay: (id: string, session: string) => post<ChatTurn>(`${T(id)}/test-chat/pay`, { session }),
+  testChatClear: (id: string) => del<{ customers: number }>(`${T(id)}/test-chat`),
+  testChatEnable: (id: string) => post<{ enabled: boolean }>(`${T(id)}/test-chat/enable`),
+  demoLinks: (id: string) => get<{ links: DemoLink[] }>(`${T(id)}/demo-links`).then((r) => r.links),
+  createDemoLink: (id: string, label: string, days: number, max_messages: number) => post<DemoLink & { token: string }>(`${T(id)}/demo-links`, { label, days, max_messages }),
+  revokeDemoLink: (id: string, lid: string) => del(`${T(id)}/demo-links/${lid}`),
+  drafts: (id: string, conversation_id?: string) => get<{ drafts: Draft[] }>(`${T(id)}/drafts${conversation_id ? `?conversation_id=${conversation_id}` : ""}`).then((r) => r.drafts),
+  sendDraft: (id: string, did: string, text?: string) => post<{ sent: boolean; edited: boolean }>(`${T(id)}/drafts/${did}/send`, text === undefined ? {} : { text }),
+  discardReply: (id: string, did: string) => post(`${T(id)}/drafts/${did}/discard`),
+  weeklyReport: (id: string) => get<WeeklyReport>(`${T(id)}/reports/weekly`),
+  sendWeeklyReport: (id: string) => post<{ delivered: number }>(`${T(id)}/reports/weekly/send`),
+};
+
+// ── the public demo page (no sign-in: the link's token is the key) ─────
+export const demoApiBase = (): string => ((import.meta.env.VITE_API_URL as string | undefined) || getSession()?.baseUrl || "").replace(/\/+$/, "");
+async function demoReq<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(demoApiBase() + path, { method, headers: body === undefined ? {} : { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch { throw new ApiError(0, "Can't reach the assistant right now. Check your connection and try again."); }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(res.status, typeof data?.detail === "string" ? data.detail : `Something went wrong (${res.status}).`);
+  return data as T;
+}
+export const demoApi = {
+  info: (token: string) => demoReq<DemoInfo>("GET", `/v1/demo/${encodeURIComponent(token)}`),
+  history: (token: string, session: string) => demoReq<{ messages: ChatHistoryItem[]; state: ChatState }>("GET", `/v1/demo/${encodeURIComponent(token)}/history?session=${encodeURIComponent(session)}`),
+  send: (token: string, session: string, text: string) => demoReq<ChatTurn>("POST", `/v1/demo/${encodeURIComponent(token)}/messages`, { session, text }),
+  pay: (token: string, session: string) => demoReq<ChatTurn>("POST", `/v1/demo/${encodeURIComponent(token)}/pay`, { session }),
 };

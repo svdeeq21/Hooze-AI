@@ -1,0 +1,37 @@
+{
+  "identity": {
+    "name": "Adire & Co.",
+    "industry": "fashion boutique",
+    "description": "Hand-dyed adire ready-to-wear for men and women, made in Abeokuta. Nationwide delivery.",
+    "website": "https://example.com/adireco",
+    "address": "Shop 9, Ikota Shopping Complex, Lekki, Lagos",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Size guide": "https://example.com/adireco/sizes", "Returns": "Exchanges within 7 days with tags on"}
+  },
+  "offerings": [
+    {"name": "Adire Kimono", "category": "Women", "description": "Flowing hand-dyed adire kimono, one size fits most", "price_minor": 2800000,
+     "option_groups": [{"name": "Colour", "selection": "single", "required": true, "options": [{"name": "Indigo"}, {"name": "Rust"}, {"name": "Forest green"}]}]},
+    {"name": "Adire Two-Piece Set", "category": "Women", "description": "Wide-leg trousers and crop top in adire cotton", "price_minor": 3500000,
+     "option_groups": [{"name": "Size", "selection": "single", "required": true, "options": [{"name": "S"}, {"name": "M"}, {"name": "L"}, {"name": "XL", "price_minor": 200000}]},
+                       {"name": "Colour", "selection": "single", "required": true, "options": [{"name": "Indigo"}, {"name": "Rust"}]}]},
+    {"name": "Men's Adire Shirt", "category": "Men", "description": "Short-sleeve adire shirt, relaxed fit", "price_minor": 2200000,
+     "option_groups": [{"name": "Size", "selection": "single", "required": true, "options": [{"name": "M"}, {"name": "L"}, {"name": "XL"}, {"name": "XXL", "price_minor": 200000}]}]},
+    {"name": "Adire Tote Bag", "category": "Accessories", "description": "Lined canvas tote with adire panel", "price_minor": 900000}
+  ],
+  "faqs": [
+    {"question": "Do you deliver outside Lagos?", "answer": "Yes, nationwide. Delivery fees depend on the state and are confirmed by our team after you order."},
+    {"question": "Can I return an item?", "answer": "You can exchange an item within 7 days if the tags are still on. Refunds are not available on sale items."},
+    {"question": "Is the dye colourfast?", "answer": "Each piece is pre-washed, but we recommend a cold hand wash for the first few washes."}
+  ],
+  "sales_process": {"goal": "order", "notes": "Help with sizing before checkout."},
+  "hours": {"default": ["09:00", "20:00"]},
+  "handoff": {"contact_name": "Kemi from Adire & Co.", "staff_phones": ["2348000000006"]},
+  "communication": {
+    "tone": "stylish, friendly and helpful",
+    "greeting": "Hi there 👋 Welcome to Adire & Co. Are you shopping for yourself or for a gift?",
+    "rules": ["Ask for size and colour before adding clothing to the cart."]
+  },
+  "restrictions": {"never_say": ["free delivery", "discount"], "prohibited_claims": ["100% organic dye"]},
+  "integrations": {"payments": "paystack"}
+}

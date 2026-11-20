@@ -33,4 +33,7 @@ class RuntimeConfig(BaseModel):
     history_window: int = 24
     first_contact_message: Optional[str] = None             # deterministic welcome, never LLM-improvised
     max_bot_replies_per_minute: int = 8                     # pd's check_rate_limit, now config
+    max_bot_replies_per_day: int = 150                      # per chat; past it the chat goes to a human (cost/abuse ceiling). 0 = no ceiling
     media_replies: dict[str, Optional[str]] = Field(default_factory=dict)   # per-kind canned reply; None = ignore silently
+    mode: str = "full_auto"                                  # full_auto | after_hours | assist (see config_engine/schema.Communication)
+    hours: dict[str, Optional[list[str]]] = Field(default_factory=dict)    # opening hours; after_hours mode is silent inside them
