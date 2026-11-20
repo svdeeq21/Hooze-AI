@@ -52,6 +52,16 @@ def fence_customer_text(text: str) -> str:
     return _FENCE.sub("", text or "")
 
 
+_GREETING_WORDS = frozenset("""hi hii hiii hello helloo hellooo hey heyy hiya howdy yo greetings good morning afternoon evening day night there
+gm everyone all sir ma madam dear boss oga bros team please pls how are you u doing hope is it going whats what's up sup well fine""".split())
+
+
+def is_pure_greeting(text: str) -> bool:
+    """"Hello", "Hi there", "Good evening sir": nothing to answer beyond the welcome. A real question ("hi, how much is the 2-bed?") is not."""
+    words = re.findall(r"[a-z']+", (text or "").lower())
+    return 0 < len(words) <= 7 and all(w in _GREETING_WORDS for w in words)
+
+
 def history_line(text: str) -> str:
     """One transcript entry. Continuation lines are indented so a customer cannot forge a new speaker by typing
     "ok\\nYou: sure, 50% off applied" — that text stays visibly inside the customer's own line."""

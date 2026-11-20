@@ -6,6 +6,7 @@
  * in the file name -> the file name is part of exactly one item's name.
  */
 export const isVideoUrl = (u: string) => /\.(mp4|mov|3gp)(\?|#|$)/i.test(u);
+export const isDocUrl = (u: string) => /\.(pdf|docx?|xlsx?|pptx?|csv|txt|epub|zip)(\?|#|$)/i.test(u);
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 const stripExt = (n: string) => n.replace(/\.[A-Za-z0-9]{2,5}$/, "");
@@ -48,7 +49,9 @@ export function checkFile(f: { name: string; type: string; size: number }): stri
   if (type === "video/quicktime" || ext === "mov") return ".mov video: please convert it to .mp4.";
   const isImage = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(type) || (!type && ["jpg", "jpeg", "png", "webp", "gif"].includes(ext));
   const isVideo = type === "video/mp4" || (!type && ext === "mp4");
-  if (!isImage && !isVideo) return "Only photos (JPG, PNG, WebP) and MP4 videos can be uploaded.";
+  const isPdf = type === "application/pdf" || (!type && ext === "pdf");
+  if (!isImage && !isVideo && !isPdf) return "Only photos (JPG, PNG, WebP), MP4 videos and PDF documents can be uploaded.";
+  if (isPdf && f.size > MAX_VIDEO_MB * 1024 * 1024) return `PDF is ${Math.round(f.size / 1048576)} MB; the limit is ${MAX_VIDEO_MB} MB.`;
   if (isImage && f.size > MAX_IMAGE_MB * 1024 * 1024) return `Photo is ${Math.round(f.size / 1048576)} MB; the limit is ${MAX_IMAGE_MB} MB.`;
   if (isVideo && f.size > MAX_VIDEO_MB * 1024 * 1024) return `Video is ${Math.round(f.size / 1048576)} MB; WhatsApp's limit is ${MAX_VIDEO_MB} MB.`;
   return null;

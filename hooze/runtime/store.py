@@ -110,6 +110,11 @@ class ConversationStore:
         }).execute()
         await self.db.table("conversations").update({"last_outbound_at": self._now()}).eq("id", conversation_id).execute()
 
+    async def last_outbound(self, conversation_id: str) -> Optional[dict]:
+        """The latest message the business side sent (assistant or a person), or None."""
+        return first(await self.db.table("messages").select("sender_type, meta, created_at").eq("conversation_id", conversation_id)
+                     .eq("direction", "outbound").in_("sender_type", ["bot", "human"]).order("created_at", desc=True).limit(1).execute())
+
     async def recent_messages(self, conversation_id: str, limit: int) -> list[dict]:
         rows = (await self.db.table("messages").select("sender_type, content, created_at, meta")
                 .eq("conversation_id", conversation_id).order("created_at", desc=True).limit(limit).execute()).data or []

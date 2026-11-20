@@ -57,6 +57,8 @@ def _caps(bc) -> dict:
                 seen.append(k)
     fmt = {"location": "📍 {v}", "price": "💰 {v}"}
     card = [{"field": "title", "fmt": "*{v}*"}] + [{"field": k, "fmt": fmt.get(k, f"{k.replace('_', ' ').title()}: {{v}}")} for k in seen]
+    if any(o.url for o in bc.offerings):
+        card.append({"field": "url", "fmt": "🔗 {v}"})      # the listing's own page/brochure link: it was stored but never shown on the card
     caps = {"qualification": {"slots": slots, "stuck_after_user_messages": bc.stuck_after_user_messages},
             "knowledge": {"top_k": 5, "threshold": 0.30, "card_fields": card, "share_media": True},
             "nudges": {"enabled": True, "dry_run": True, "window": [8, 20], "max_steps": 3}}   # dry-run until reviewed on real conversations

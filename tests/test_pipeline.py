@@ -195,8 +195,10 @@ async def test_explicit_human_request_pauses_ai_alerts_staff_and_skips_the_llm(r
     assert w.db.rows("contacts")[0]["ai_paused"] is True
     assert w.db.rows("conversations")[0]["status"] == "handoff"
     n = len(w.replies())
-    out = await w.send("hello??")                                          # while a human owns it
-    assert out.status == "paused" and len(w.replies()) == n and w.llm.calls == []
+    out = await w.send("hello??")                                          # while a human owns it: ONE acknowledgement, never the AI
+    assert out.status == "paused" and w.llm.calls == [] and len(w.replies()) == n + 1 and "Sadiq will reply here shortly" in w.last_reply()
+    await w.send("anyone there?")
+    assert len(w.replies()) == n + 1                                       # ...and then silence until a person replies
 
 
 @pytest.mark.parametrize("text", ["you can call me John", "just call me Ade", "call me Chinedu", "Please call me Mrs Okafor"])

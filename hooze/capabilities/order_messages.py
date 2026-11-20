@@ -70,6 +70,8 @@ def format_item_caption(p: dict, cur: str) -> str:
 
 
 def _where(method: Optional[str], address: Optional[str]) -> str:
+    if method == "DIGITAL":
+        return "📩 Sent to you here as soon as payment goes through"
     return f"🚴 Delivery to: {address}" if method == "DELIVERY" and address else "🚴 Delivery" if method == "DELIVERY" else "🏠 Pickup"
 
 
@@ -83,6 +85,6 @@ def format_checkout(items: list[dict], subtotal_minor: int, method: Optional[str
 
 def format_receipt(business: str, items: list[dict], subtotal_minor: int, method: Optional[str], cur: str) -> str:
     nxt = ("🚴 We'll reach out shortly to confirm your delivery fee and arrange delivery." if method == "DELIVERY"
-           else "🏠 We'll message you the moment it's ready for pickup.")
+           else "📩 Your download is in the next message." if method == "DIGITAL" else "🏠 We'll message you the moment it's ready for pickup.")
     thanks = f"Thank you for choosing *{business}*! 🙏" if business else "Thank you! 🙏"
     return f"✅ *Payment received — thank you!*\n{_lines(items, cur)}\n{RULE}\n*Paid: {fmt_money(subtotal_minor, cur)}*\n\n{nxt}\n\n{thanks}"

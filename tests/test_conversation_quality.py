@@ -35,9 +35,17 @@ async def test_a_plain_hello_gets_the_scripted_welcome_only_not_a_second_greetin
     w = re_world
     await _live(w, greeting="Welcome to Praise Dynasty. Tell me what you're looking for.")
     w.llm.say("Good morning! How can we assist your business today?", intent="greeting")
-    await w.send("Hello Good Morning")
+    out = await w.send("Hello Good Morning")
     assert w.replies() == ["Welcome to Praise Dynasty. Tell me what you're looking for."]
-    assert "GREETING_REPLY_SUPPRESSED" in w.sink.names()
+    assert out.status == "greeted" and w.llm.calls == []          # a pure greeting never reaches the model: nothing to repeat, nothing to pay for
+
+
+async def test_if_the_model_still_greets_after_the_welcome_its_greeting_is_suppressed(re_world):
+    w = re_world
+    await _live(w, greeting="Welcome to Praise Dynasty.")
+    w.llm.say("Good morning! How can we assist?", intent="greeting")
+    await w.send("Hello, I saw your ad on Instagram yesterday")        # not a pure greeting, so the model is asked; it only greeted
+    assert w.replies() == ["Welcome to Praise Dynasty."] and "GREETING_REPLY_SUPPRESSED" in w.sink.names()
 
 
 async def test_a_real_question_gets_the_welcome_then_the_answer_and_the_model_is_told_not_to_greet_again(re_world):
@@ -59,7 +67,7 @@ async def test_without_a_scripted_welcome_a_greeting_is_answered_by_the_model_as
 async def test_the_welcome_is_sent_once_per_new_conversation_only(re_world):
     w = re_world
     await _live(w, greeting="Welcome!")
-    w.llm.say("hi", intent="greeting"); await w.send("hello")
+    await w.send("hello")
     w.llm.say("Sure, one moment.", intent="question"); await w.send("do you have flats in Lekki")
     assert w.replies() == ["Welcome!", "Sure, one moment."]
 

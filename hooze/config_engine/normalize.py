@@ -148,7 +148,7 @@ def normalize_raw(raw: Any) -> tuple[dict, list[str]]:
         offerings.append({"name": _s(o.get("name")), "description": _s(o.get("description")),
                           "price_minor": int(pm) if pm is not None else None, "price_note": _s(o.get("price_note")),
                           "category": _s(o.get("category")), "url": _s(o.get("url")), "media": _str_list(o.get("media")),
-                          "details": details, "option_groups": groups})
+                          "details": details, "option_groups": groups, "delivery_url": _s(o.get("delivery_url"))})
 
     # ── faqs ─────────────────────────────────────────────────
     faqs: list[dict] = []

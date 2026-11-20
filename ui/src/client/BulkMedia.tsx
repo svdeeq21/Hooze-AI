@@ -55,7 +55,7 @@ export function BulkMedia({ tenantId, offerings, open, onClose, onApply }: {
   return (
     <Modal open={open} onClose={() => { if (!running) onClose(); }} title="Bulk upload photos and videos" wide>
       <p className="mb-3 text-sm text-muted">Choose many files at once. A file named like an item (<span className="text-text">jollof-rice.jpg</span>, <span className="text-text">jollof-rice-2.jpg</span>) attaches to it automatically. Check the matches, fix any, then upload.</p>
-      <input ref={input} type="file" multiple hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4" onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
+      <input ref={input} type="file" multiple hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,application/pdf" onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
       <div onClick={() => !running && input.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); if (!running) addFiles(Array.from(e.dataTransfer.files)); }}
         className="mb-4 cursor-pointer rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted hover:text-text">
         Drop files here, or click to choose
@@ -74,7 +74,7 @@ export function BulkMedia({ tenantId, offerings, open, onClose, onApply }: {
             {rows.map((r) => (
               <li key={r.id} className="flex items-center gap-3 p-2">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-raised text-xs text-muted">
-                  {r.preview ? <img src={r.preview} alt="" className="h-full w-full object-cover" /> : r.file.type.startsWith("video/") ? "▶" : "?"}
+                  {r.preview ? <img src={r.preview} alt="" className="h-full w-full object-cover" /> : r.file.type.startsWith("video/") ? "▶" : r.file.type === "application/pdf" ? "📄" : "?"}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm">{r.file.name}</div>

@@ -87,7 +87,7 @@ export interface Product { id: string; name: string; description: string | null;
 // config (mirrors hooze/config_engine/schema.py)
 export interface OptionChoice { name: string; price_minor: number }
 export interface OptionGroup { name: string; selection: "single" | "multiple"; required: boolean; max_included: number | null; options: OptionChoice[] }
-export interface Offering { name: string; description: string; price_minor: number | null; price_note: string; category: string; url: string; media: string[]; details: Record<string, string>; option_groups: OptionGroup[] }
+export interface Offering { name: string; description: string; price_minor: number | null; price_note: string; category: string; url: string; media: string[]; details: Record<string, string>; option_groups: OptionGroup[]; delivery_url?: string }
 export interface Slot { name: string; label: string; type: "text" | "number" | "money" | "enum" | "bool"; values: string[]; aliases: Record<string, string[]>; required: boolean; ask: string }
 export interface BusinessConfig {
   identity: { name: string; industry: string; description: string; website: string; address: string; languages: string[]; timezone: string; currency: string; facts: Record<string, string> };
@@ -128,7 +128,7 @@ export interface DemoInfo { business: string; description: string; goal: string 
 
 const T = (id: string) => `/v1/tenants/${id}`;
 const PT = (id: string) => `/v1/platform/tenants/${id}`;
-export interface UploadedMedia { url: string; type: "image" | "video"; bytes: number; name: string }
+export interface UploadedMedia { url: string; type: "image" | "video" | "document"; bytes: number; name: string }
 export const api = {
   uploadMedia: (id: string, file: File) => { const f = new FormData(); f.append("file", file); return req<UploadedMedia>("POST", `/v1/tenants/${id}/media`, f); },
   overview: () => get<Overview>("/v1/platform/overview"),

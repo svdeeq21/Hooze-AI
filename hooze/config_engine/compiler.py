@@ -37,6 +37,19 @@ def _hours_text(hours: dict) -> str:
     return ", ".join(out)
 
 
+DOC_EXT = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".txt", ".epub", ".zip")
+
+
+def media_type(url: str) -> str:
+    """image | video | document, from the link's file extension (WhatsApp sends each kind differently)."""
+    u = (url or "").lower().split("?")[0]
+    if u.endswith((".mp4", ".mov", ".3gp")):
+        return "video"
+    if u.endswith(DOC_EXT):
+        return "document"
+    return "image"
+
+
 def compile_config(bc: BusinessConfig, version: int = 1) -> Compiled:
     pack = get_pack(bc.sales_process.goal)
     idt = bc.identity
@@ -63,14 +76,14 @@ def compile_config(bc: BusinessConfig, version: int = 1) -> Compiled:
         price = fmt_money(o.price_minor, idt.currency) if o.price_minor is not None else (o.price_note or "Price on request")
         if bc.sales_process.goal == "order":
             catalog.append({"name": o.name, "description": o.description, "price_minor": o.price_minor or 0, "category": o.category,
-                            "media": [{"type": "video" if u.lower().split("?")[0].endswith((".mp4", ".mov", ".3gp")) else "image", "url": u} for u in o.media],
+                            "media": [{"type": media_type(u), "url": u} for u in o.media], "delivery_url": o.delivery_url,
                             "groups": [{"name": g.name, "selection": g.selection, "required": g.required, "max_selections": g.max_included,
                                         "options": [{"name": c.name, "price_minor": c.price_minor} for c in g.options]} for g in o.option_groups]})
         else:
             data = {"price": price, **o.details, **({"url": o.url} if o.url else {})}
             body = " ".join(filter(None, [o.description, *(f"{k}: {v}" for k, v in o.details.items()), f"Price: {price}"]))
             docs.append(KnowledgeDoc(external_id=f"offering:{_slug(o.name)}", kind="offering", title=o.name, content=body, data=data,
-                                     media=[{"type": "video" if u.lower().endswith(".mp4") else "image", "url": u} for u in o.media]))
+                                     media=[{"type": media_type(u), "url": u} for u in o.media]))
     for f in bc.faqs:
         docs.append(KnowledgeDoc(external_id=f"faq:{_slug(f.question)}", kind="faq", title=f.question, content=f.answer))
     return Compiled(runtime=runtime, knowledge_docs=docs, catalog=catalog)

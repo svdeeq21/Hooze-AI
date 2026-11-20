@@ -1,4 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+// Phone or desktop layout. Rendering both and hiding one with CSS put every client in the page twice (screen readers read both).
+const WIDE = "(min-width: 768px)";
+function useWide(): boolean {
+  const get = () => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(WIDE).matches : true);
+  const [wide, setWide] = useState(get);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const m = window.matchMedia(WIDE), h = () => setWide(m.matches);
+    m.addEventListener?.("change", h);
+    return () => m.removeEventListener?.("change", h);
+  }, []);
+  return wide;
+}
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { api } from "../lib/api";
@@ -19,13 +33,14 @@ export default function Clients() {
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["tenants"] }); setCreated({ id: r.tenant.id, key: r.api_key }); },
     onError: (e) => toast("bad", errMsg(e)),
   });
+  const wide = useWide();
   const close = () => { setOpen(false); setName(""); setSlug(""); setCreated(null); };
   return (
     <>
       <PageHeader title="Clients" sub="Every business using Hooze." action={<Button variant="primary" onClick={() => setOpen(true)}>+ New client</Button>} />
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} retry={() => q.refetch()} /> : !q.data?.length ? <Empty>No clients yet. Create one to start setting up their assistant.</Empty> : (
-        <>
-        <ul className="grid gap-3 md:hidden">{q.data.map((t) => (
+        !wide ? (
+        <ul className="grid gap-3">{q.data.map((t) => (
           <li key={t.id}><Link to="/clients/$tenantId" params={{ tenantId: t.id }} search={{ tab: "overview" }} className="block rounded-xl border border-line bg-panel p-4 hover:border-amber">
             <div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate font-medium">{t.name}</div><div className="text-xs text-muted">{t.slug} · added {ago(t.created_at)}</div></div><StatusBadge status={t.status} /></div>
             <div className="mt-3 flex flex-wrap gap-1.5">
@@ -34,7 +49,8 @@ export default function Clients() {
               <Badge tone="mute">{t.conversations} chats</Badge>{t.handoff > 0 && <Badge tone="warn">{t.handoff} waiting</Badge>}
             </div>
           </Link></li>))}</ul>
-        <Card className="hidden overflow-hidden !p-0 md:block">
+        ) : (
+        <Card className="overflow-hidden !p-0">
           <table className="w-full text-sm">
             <thead className="border-b border-line text-left text-xs uppercase tracking-wider text-muted"><tr><th className="px-4 py-3">Client</th><th>Status</th><th>WhatsApp</th><th>Setup</th><th>Chats</th><th className="pr-4">Added</th></tr></thead>
             <tbody className="divide-y divide-line">{q.data.map((t) => (
@@ -48,7 +64,7 @@ export default function Clients() {
               </tr>))}</tbody>
           </table>
         </Card>
-        </>)}
+        ))}
       <Modal open={open} onClose={close} title={created ? "Client created" : "New client"}>
         {created ? (
           <div className="space-y-4">

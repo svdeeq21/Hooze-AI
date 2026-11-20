@@ -196,7 +196,7 @@ function Form({ id, initial, version, name, go, fromDraft, draftSavedAt, onDraft
         </div>
       </Section>
 
-      <Section {...sp("offer")} title={goal === "order" ? "3 · Menu / products" : "3 · What you offer"} action={<div className="flex gap-2"><Button size="sm" onClick={() => setBulk(true)} disabled={cfg.offerings.length === 0}>Bulk upload photos</Button><Button size="sm" onClick={() => set((c) => { c.offerings.push({ name: "", description: "", price_minor: null, price_note: "", category: "", url: "", media: [], details: {}, option_groups: [] }); })}>+ Add</Button></div>}>
+      <Section {...sp("offer")} title={goal === "order" ? "3 · Menu / products" : "3 · What you offer"} action={<div className="flex gap-2"><Button size="sm" onClick={() => setBulk(true)} disabled={cfg.offerings.length === 0}>Bulk upload photos</Button><Button size="sm" onClick={() => set((c) => { c.offerings.push({ name: "", description: "", price_minor: null, price_note: "", category: "", url: "", media: [], details: {}, option_groups: [], delivery_url: "" }); })}>+ Add</Button></div>}>
         {cfg.offerings.length === 0 && <p className="text-sm text-muted">Nothing added yet.</p>}
         <div className="space-y-4">{cfg.offerings.map((o, i) => (
           <OfferingEditor key={i} o={o} order={goal === "order"} tenantId={id}
@@ -313,8 +313,10 @@ function OfferingEditor({ o, order, tenantId, onChange, onRemove, onMediaAdd, on
         <Field label="Price note" hint="e.g. “from”, “on request”"><Input value={o.price_note} onChange={(e) => upd((x) => { x.price_note = e.target.value; })} /></Field>
         <Field label="Description" className="md:col-span-4"><Textarea value={o.description} onChange={(e) => upd((x) => { x.description = e.target.value; })} className="min-h-[56px]" /></Field>
         <Field label="Category" hint={order ? "Groups the menu into sections, e.g. Rice, Drinks." : ""}><Input value={o.category} onChange={(e) => upd((x) => { x.category = e.target.value; })} /></Field>
-        <Field label="Link" className="md:col-span-2"><Input value={o.url} onChange={(e) => upd((x) => { x.url = e.target.value; })} /></Field>
-        <Field label="Photos and videos" className="md:col-span-4"><MediaField tenantId={tenantId} urls={o.media} onAdd={onMediaAdd} onRemove={onMediaRemove} /></Field>
+        <Field label="Link" hint={order ? "" : "A page, virtual tour or brochure link. It is shown on the card the assistant sends."} className="md:col-span-2"><Input value={o.url} placeholder="https://…" onChange={(e) => upd((x) => { x.url = e.target.value; })} /></Field>
+        {order && <Field label="Digital product: download link" hint="For e-books, courses, templates, tickets. Sent automatically the moment payment is confirmed, never before. Leave empty for physical items." className="md:col-span-4">
+          <Input value={o.delivery_url ?? ""} placeholder="https://… (Google Drive, Dropbox, your course page, or a PDF you uploaded)" onChange={(e) => upd((x) => { x.delivery_url = e.target.value; })} /></Field>}
+        <Field label="Photos, videos and PDF brochures" hint="Sent to the customer when they ask to see this one." className="md:col-span-4"><MediaField tenantId={tenantId} urls={o.media} onAdd={onMediaAdd} onRemove={onMediaRemove} /></Field>
       </div>
       <div className="mt-3"><KV label="Details" hint="Facts shown to customers: size, location, title…" value={o.details} onChange={(v) => upd((x) => { x.details = v; })} /></div>
       {order && (

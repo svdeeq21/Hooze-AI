@@ -182,7 +182,14 @@ class Pipeline:
             await cap.on_inbound(turn)
 
         if contact.get("ai_paused") or conv.get("status") == "handoff":
-            return TurnOutcome("paused")                 # a human owns this conversation; message is stored
+            # A human owns this conversation; the message is stored. But a customer who keeps writing after "I'm bringing in the team" and
+            # hears nothing thinks the business went silent (real demo). So: ONE short acknowledgement, only while no person has replied yet.
+            if conv.get("status") == "handoff" and text:
+                last = await store.last_outbound(conv["id"])
+                if last and last.get("sender_type") == "bot" and (last.get("meta") or {}).get("kind") != "handoff_ack":
+                    who = caps["handoff"]._who() if "handoff" in caps else "the team"
+                    await out.text(f"Thanks, I've passed that on. {who[:1].upper() + who[1:]} will reply here shortly 🙏", meta={"kind": "handoff_ack"}, typing=False)
+            return TurnOutcome("paused")
 
         # After-hours mode: while the business is OPEN the team answers on their own phone as usual; the assistant only covers
         # the hours they are closed. The message is stored either way, so the chat history stays complete.
@@ -201,6 +208,10 @@ class Pipeline:
         if is_new and cfg.first_contact_message:
             await out.text(cfg.first_contact_message, typing=False)
             greeted = True
+            if guards.is_pure_greeting(text):
+                # "Hello Good evening" -> the welcome IS the answer. Asking the AI as well produced a second greeting that repeated the
+                # welcome's question in other words (real demo transcript). Also saves a model call.
+                return TurnOutcome("greeted", reply=cfg.first_contact_message)
 
         if await store.count_recent_bot(conv["id"]) >= cfg.max_bot_replies_per_minute:
             await self.events.warn("RATE_LIMITED", tenant_id=tid, trace_id=trace)

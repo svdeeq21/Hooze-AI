@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { api } from "../lib/api";
-import { checkFile, isVideoUrl, runPool } from "../lib/mediaMatch";
+import { checkFile, isDocUrl, isVideoUrl, runPool } from "../lib/mediaMatch";
 import { Input, Spinner } from "../components/ui";
 import { errMsg } from "../lib/util";
 
@@ -39,7 +39,9 @@ export function MediaField({ tenantId, urls, onAdd, onRemove }: { tenantId: stri
       <div className="flex flex-wrap items-center gap-2">
         {urls.map((u) => (
           <div key={u} className="group relative h-16 w-16 overflow-hidden rounded-lg border border-line bg-raised">
-            {isVideoUrl(u)
+            {isDocUrl(u)
+              ? <a href={u} target="_blank" rel="noopener" title={u.split("/").pop()} className="flex h-full w-full flex-col items-center justify-center text-[10px] text-muted"><span className="text-lg">📄</span>PDF</a>
+              : isVideoUrl(u)
               ? <div className="flex h-full w-full flex-col items-center justify-center text-[10px] text-muted"><span className="text-lg">▶</span>video</div>
               : <img src={u} alt="" loading="lazy" className="h-full w-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = "0.25"; }} />}
             <button type="button" title="Remove" onClick={() => onRemove(u)}
@@ -51,7 +53,7 @@ export function MediaField({ tenantId, urls, onAdd, onRemove }: { tenantId: stri
           className={`flex h-16 min-w-[8rem] cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-3 text-xs transition ${over ? "border-amber text-amber" : "border-line text-muted hover:text-text"}`}>
           {busy > 0 ? <><Spinner className="h-4 w-4" />Uploading {busy}…</> : <>＋ Add photos / videos</>}
         </button>
-        <input ref={input} type="file" multiple hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4"
+        <input ref={input} type="file" multiple hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,application/pdf"
           onChange={(e) => { void upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
       </div>
       <div className="mt-1.5 text-xs text-muted">

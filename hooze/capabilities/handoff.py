@@ -95,7 +95,8 @@ class HandoffCapability(Capability):
         async def request_human(turn, args: _NoArgs) -> ToolResult:
             await self.escalate(turn, args.reason or "HUMAN_REQUESTED_BY_MODEL")
             return ToolResult(message=f"Understood — I'm bringing in {self._who()} to help you directly. They'll message you shortly.")
-        return [Tool("request_human", "hand the conversation to a person (customer asked, or is upset)", _NoArgs, request_human, self.name)]
+        return [Tool("request_human", "hand the conversation to a person: ONLY if the customer asks for a person, is upset, or needs something no tool can do. "
+                     "Never to show details, photos, prices or links you can share yourself (use share_item)", _NoArgs, request_human, self.name)]
 
     def staff_commands(self) -> list[StaffCommand]:
         async def _set(match: re.Match, actor: str, paused: bool) -> str:

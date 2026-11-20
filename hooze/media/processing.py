@@ -23,7 +23,7 @@ class MediaError(ValueError):
 
 @dataclass
 class Processed:
-    kind: str           # image | video
+    kind: str           # image | video | document
     ext: str            # jpg | mp4
     content_type: str
     data: bytes
@@ -40,6 +40,8 @@ def sniff(data: bytes) -> str | None:
         return "webp"
     if data[:4] == b"GIF8":
         return "gif"
+    if data[:5] == b"%PDF-":
+        return "pdf"
     if data[4:8] == b"ftyp":
         brand = data[8:12]
         if brand in HEIC_BRANDS:
@@ -98,6 +100,10 @@ def process(data: bytes, *, max_image_mb: int = 15, max_video_mb: int = 16, max_
         if len(data) > max_video_mb * MB:
             raise MediaError(f"That video is {len(data) / MB:.0f} MB. WhatsApp's limit is {max_video_mb} MB — trim or compress it first.")
         return Processed("video", "mp4", "video/mp4", data, len(data))
+    if kind == "pdf":
+        if len(data) > max_video_mb * MB:
+            raise MediaError(f"That PDF is {len(data) / MB:.0f} MB. The limit is {max_video_mb} MB — compress it or split it first.")
+        return Processed("document", "pdf", "application/pdf", data, len(data))
     if kind == "heic":
         raise MediaError("That's an iPhone HEIC photo. Export or share it as JPG first (or set the camera to \"Most Compatible\").")
     if kind == "mov":
@@ -106,4 +112,4 @@ def process(data: bytes, *, max_image_mb: int = 15, max_video_mb: int = 16, max_
         raise MediaError("That's an AVIF image. Save or export it as JPG or PNG first.")
     if kind == "audio":
         raise MediaError("That's an audio file. Only photos (JPG, PNG, WebP) and MP4 videos can be added to the menu.")
-    raise MediaError("Only photos (JPG, PNG, WebP) and MP4 videos can be uploaded.")
+    raise MediaError("Only photos (JPG, PNG, WebP), MP4 videos and PDF documents can be uploaded.")

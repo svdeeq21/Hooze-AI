@@ -137,12 +137,17 @@ class EvolutionAdapter:
         })
 
     async def send_media(self, to: str, url: str, media_type: str, caption: str = "") -> None:
-        ext = url.lower().split("?")[0].rsplit(".", 1)[-1]
-        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp",
-                "mp4": "video/mp4", "pdf": "application/pdf"}.get(ext, "application/octet-stream")
+        path = url.split("?")[0]
+        ext = path.lower().rsplit(".", 1)[-1]
+        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "mp4": "video/mp4",
+                "pdf": "application/pdf", "doc": "application/msword", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "xls": "application/vnd.ms-excel", "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "ppt": "application/vnd.ms-powerpoint", "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "epub": "application/epub+zip", "zip": "application/zip", "csv": "text/csv", "txt": "text/plain"}.get(ext, "application/octet-stream")
+        name = path.rsplit("/", 1)[-1][:120] if media_type == "document" else ""      # a document without a file name shows as "untitled"
         await self._post("/message/sendMedia", {
             "number": to.lstrip("+"), "mediatype": media_type, "mimetype": mime,
-            "caption": to_whatsapp_markdown(caption), "media": url, "fileName": "",
+            "caption": to_whatsapp_markdown(caption), "media": url, "fileName": name,
         }, timeout=30.0)
 
     async def download_media(self, raw_message: dict) -> Optional[bytes]:

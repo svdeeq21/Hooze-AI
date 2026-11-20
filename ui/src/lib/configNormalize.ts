@@ -80,7 +80,7 @@ export function normalizeConfig(raw: unknown): Normalized {
     });
     const details: Record<string, string> = {};
     for (const [k, v] of Object.entries(obj(o.details))) if (str(v)) details[k] = str(v);
-    offerings.push({ name: str(o.name), description: str(o.description), price_minor: pm != null ? Math.round(pm) : null, price_note: str(o.price_note), category: str(o.category), url: str(o.url), media: strList(o.media), details, option_groups: groups });
+    offerings.push({ name: str(o.name), description: str(o.description), price_minor: pm != null ? Math.round(pm) : null, price_note: str(o.price_note), category: str(o.category), url: str(o.url), media: strList(o.media), details, option_groups: groups, delivery_url: str(o.delivery_url) });
   });
 
   // faqs

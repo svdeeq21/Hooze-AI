@@ -32,7 +32,8 @@ describe("checkFile", () => {
     expect(checkFile(f("a.mp4", "video/mp4", 15))).toBeNull();
     expect(checkFile(f("a.heic", "image/heic"))).toContain("HEIC");
     expect(checkFile(f("a.mov", "video/quicktime"))).toContain(".mov");
-    expect(checkFile(f("a.pdf", "application/pdf"))).toContain("Only photos");
+    expect(checkFile(f("a.pdf", "application/pdf"))).toBeNull();                     // PDF brochures / e-books are accepted
+    expect(checkFile(f("a.zip", "application/zip"))).toContain("Only photos");
     expect(checkFile(f("a.mp4", "video/mp4", 20))).toContain("16 MB");
     expect(checkFile(f("a.png", "image/png", 40))).toContain("15 MB");
   });

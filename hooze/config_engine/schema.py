@@ -31,6 +31,8 @@ class Offering(BaseModel):
     media: list[str] = Field(default_factory=list)
     details: dict[str, str] = Field(default_factory=dict)  # free-form facts shown on the card (location, size, title, ...)
     option_groups: list[OptionGroup] = Field(default_factory=list)
+    # Digital products: the download link (or PDF) sent AUTOMATICALLY once payment is verified. Never shown before payment.
+    delivery_url: str = ""
 
 class FAQ(BaseModel):
     question: str

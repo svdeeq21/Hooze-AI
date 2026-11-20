@@ -58,6 +58,7 @@ async def test_demo_tenant_script_can_go_live_and_hand_out_a_working_demo_link(r
         out = await create_demo_tenant(http, PLATFORM, "salon", name="Glam Corner", staff_phone="08012345678", go_live=True)
         assert out["live"] and out["demo_token"]
         info = (await http.get(f"/v1/demo/{out['demo_token']}")).json()
-        w.llm.say("Hey lovely!")
-        chat = (await http.post(f"/v1/demo/{out['demo_token']}/messages", json={"session": "prospect-0001", "text": "hi"})).json()
-    assert info["business"] == "Glam Corner" and info["live"] and chat["replies"][-1]["text"] == "Hey lovely!"
+        w.llm.say("Knotless braids are ₦35,000.")
+        chat = (await http.post(f"/v1/demo/{out['demo_token']}/messages", json={"session": "prospect-0001", "text": "hi, how much are knotless braids?"})).json()
+    assert info["business"] == "Glam Corner" and info["live"]
+    assert [r["text"] for r in chat["replies"]] == ["Hey lovely! ✨ Welcome to Glam Corner. What are we doing for you — hair, nails or make-up?", "Knotless braids are ₦35,000."]

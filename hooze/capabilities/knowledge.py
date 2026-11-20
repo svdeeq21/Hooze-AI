@@ -99,26 +99,88 @@ def render_card(item: dict, fields: list[dict]) -> str:
     return "\n".join(lines) or item.get("title", "")
 
 
+ASKS_TO_SEE = re.compile(r"\b(photos?|pictures?|pics?|images?|videos?|brochures?|documents?|pdf|details?|see it|show me|send (it|them|me))\b", re.I)
+
+
+def search_text(turn) -> str:
+    """What to look the records up with.
+
+    The customer's latest words ALONE broke real demos: "Yes please" (to "want to see the photos?") or "can I see images" match no record,
+    so the assistant had nothing it was allowed to show and handed the chat to a person; "my budget is 500 million" (with Lekki said one
+    message earlier) found the Abuja listing and missed the Lekki one. So the search also uses what the customer told us (slots), what the
+    assistant just said (it names the listing being discussed) and the customer's previous couple of messages."""
+    parts = [turn.text]
+    slots = ((turn.contact.get("attributes") or {}).get("slots") or {})
+    known = "; ".join(f"{k}: {v}" for k, v in slots.items() if v not in (None, "", []))
+    if known:
+        parts.append(known)
+    hist = turn.history or []
+    last_bot = next((m.get("content") for m in reversed(hist) if m.get("sender_type") == "bot" and m.get("content")), "")
+    if last_bot:
+        parts.append(last_bot[:400])
+    parts += [m["content"] for m in hist if m.get("sender_type") == "contact" and m.get("content")][-2:]
+    return "\n".join(p for p in parts if p)[:1500]
+
+
+def media_note(it: dict) -> str:
+    """Tell the model what the record really has, so it never offers photos that don't exist (or refuses ones that do)."""
+    kinds = [m.get("type", "image") for m in (it.get("media") or [])]
+    if not kinds:
+        return "no photos/videos/documents on file"
+    n = {k: kinds.count(k) for k in ("image", "video", "document")}
+    words = [f"{n['image']} photo{'s' if n['image'] != 1 else ''}" if n["image"] else "", f"{n['video']} video{'s' if n['video'] != 1 else ''}" if n["video"] else "",
+             f"{n['document']} document{'s' if n['document'] != 1 else ''}" if n["document"] else ""]
+    return ", ".join(w for w in words if w) + " on file (share_item sends them)"
+
+
 @register
 class KnowledgeCapability(Capability):
     name = "knowledge"
 
+    async def _recent(self, turn, have: set) -> list[dict]:
+        """Records the customer was shown or told about on recent turns stay available, so "yes", "send it" and "the pictures?" still work."""
+        ids = [i for i in ((turn.contact.get("attributes") or {}).get("recent_items") or []) if i not in have]
+        if not ids:
+            return []
+        rows = (await turn.db.table("knowledge_items").select("id, kind, title, content, data, media, is_active").in_("id", ids).execute()).data or []
+        by_id = {r["id"]: r for r in rows if r.get("is_active", True)}
+        return [by_id[i] for i in ids if i in by_id]
+
     async def context(self, turn) -> str:
         try:
-            emb = await turn.llm.embed(turn.tenant_id, turn.text, fail_fast=True)
+            emb = await turn.llm.embed(turn.tenant_id, search_text(turn), fail_fast=True)
             params = {"p_embedding": emb, "p_threshold": self.config.get("threshold", 0.30), "p_count": self.config.get("top_k", 5), "p_kind": None}
             items = (await turn.db.rpc("match_knowledge", params).execute()).data or []
+            items = items + await self._recent(turn, {it["id"] for it in items})
         except Exception as e:
             await turn.events.warn("KNOWLEDGE_LOOKUP_FAILED", tenant_id=turn.tenant_id, trace_id=turn.trace_id, error=str(e)[:160])
             return "RELEVANT RECORDS: (lookup unavailable — do not state specifics; offer to have a person follow up)"
         refs = {f"K{i + 1}": it for i, it in enumerate(items)}
         turn.scratch["knowledge_refs"] = refs
+        turn.scratch["knowledge_recent"] = [it["id"] for it in items[:3]]
         if not refs:
             return "RELEVANT RECORDS: (none matched). Do not invent any; say you'll check, or ask what they're looking for."
-        lines = ["RELEVANT RECORDS (verified). State ONLY what is written here. Answer questions in your own words from the record text. Only if the customer asks to SEE a record's full details/photos, propose share_item with its ref (never twice to the same customer)."]
+        lines = ["RELEVANT RECORDS (verified). State ONLY what is written here. Answer questions in your own words from the record text.",
+                 "To SHOW a record (the customer asks for details, photos, pictures, a video, the brochure or the link, or says yes when you offered "
+                 "to show it), propose share_item with its ref: it sends the full card and the files listed. Never hand the chat to a person "
+                 "for this, and never offer photos a record doesn't have."]
         for ref, it in refs.items():
-            lines.append(f"[{ref}] {it.get('title', '')}: {(it.get('content') or '')[:500]}")
+            lines.append(f"[{ref}] {it.get('title', '')}: {(it.get('content') or '')[:500]} [{media_note(it)}]")
         return "\n".join(lines)
+
+    async def after_turn(self, turn) -> None:
+        """Remember which records were in play this turn (shared ones first), for the next turn's follow-up questions."""
+        shared = [r.data.get("item_id") for r in (turn.results or []) if r.tool == "share_item" and r.ok and r.data.get("item_id")]
+        recent = list(dict.fromkeys([*shared, *(turn.scratch.get("knowledge_recent") or [])]))[:4]
+        attrs = dict(turn.contact.get("attributes") or {})
+        if not recent or attrs.get("recent_items") == recent:
+            return
+        attrs["recent_items"] = recent
+        turn.contact["attributes"] = attrs
+        try:
+            await turn.store.set_contact(turn.contact["id"], attributes=attrs)
+        except Exception as e:
+            await turn.events.warn("RECENT_ITEMS_RECORD_FAILED", tenant_id=turn.tenant_id, error=str(e)[:120])
 
     def tools(self) -> list[Tool]:
         async def share_item(turn, args: _Share) -> ToolResult:
@@ -128,7 +190,8 @@ class KnowledgeCapability(Capability):
             attrs = dict(turn.contact.get("attributes") or {})
             shared = dict(attrs.get("shared_items") or {})
             last, now = shared.get(item["id"]), self.ctx.clock()
-            if last and (now - datetime.fromisoformat(last)).total_seconds() < self.config.get("reshare_after_hours", 24) * 3600:
+            asked = bool(ASKS_TO_SEE.search(turn.text or ""))       # the customer explicitly asked to see it (again): always honour that
+            if last and not asked and (now - datetime.fromisoformat(last)).total_seconds() < self.config.get("reshare_after_hours", 24) * 3600:
                 # The same full card re-sent on every pitch is a brochure, not a conversation (real chat: the product card went to the same
                 # prospect twice). Not ok => the model's "here are the details again" claim is stripped and its own short reply stands.
                 return ToolResult(ok=False, internal_error=f"card for {item['id']} already shared recently")
@@ -146,7 +209,8 @@ class KnowledgeCapability(Capability):
             except Exception as e:                       # the card WAS sent; a bookkeeping failure must not fail the tool
                 await turn.events.warn("SHARED_ITEM_RECORD_FAILED", tenant_id=turn.tenant_id, error=str(e)[:120])
             return ToolResult(data={"item_id": item["id"], "title": item.get("title")})
-        return [Tool("share_item", "send the full card (details + photos) of ONE record from RELEVANT RECORDS. Only when the customer asks to see or get that record; never to introduce the business or answer a general question", _Share, share_item, self.name)]
+        return [Tool("share_item", "send the full card (details, link, photos, videos, documents) of ONE record from RELEVANT RECORDS: whenever the customer asks to see it, "
+                     "asks for its photos/pictures/video/brochure/link, or says yes to seeing it. Never to introduce the business or answer a general question", _Share, share_item, self.name)]
 
     def check_reply(self, turn, reply: str, results: list) -> Optional[str]:
         if any(r.tool == "share_item" and r.ok for r in results):

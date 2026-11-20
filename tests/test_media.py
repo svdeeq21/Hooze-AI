@@ -89,8 +89,10 @@ async def test_upload_rejects_bad_files_with_a_clear_message_and_missing_storage
     cont = container(w); cont.media = MemoryMediaStorage()
     async with client(cont) as c:
         t, k = await _tenant(c, "gamma")
-        r = await c.post(f"/v1/tenants/{t}/media", files={"file": ("menu.jpg", b"%PDF-1.4 definitely not a jpg", "image/jpeg")}, headers=k)
+        r = await c.post(f"/v1/tenants/{t}/media", files={"file": ("menu.jpg", b"PK\x03\x04 a zip, not a jpg", "image/jpeg")}, headers=k)
         assert r.status_code == 422 and "Only photos" in r.json()["detail"] and not cont.media.files
+        pdf = await c.post(f"/v1/tenants/{t}/media", files={"file": ("brochure.jpg", b"%PDF-1.4 a brochure", "image/jpeg")}, headers=k)
+        assert pdf.status_code == 200 and pdf.json()["type"] == "document" and pdf.json()["url"].endswith(".pdf")    # the bytes decide, not the name
         big = await c.post(f"/v1/tenants/{t}/media", files={"file": ("big.jpg", b"\xff\xd8\xff" + b"\0" * (17 * MB), "image/jpeg")}, headers=k)
         assert big.status_code == 413
         cont.media = None

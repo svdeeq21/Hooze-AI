@@ -6,14 +6,14 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the design, audit trace
 ## Run the tests (no network, no Supabase needed)
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 498 tests, ~50s  (Windows: set PYTHONUTF8=1 first)
+python -m pytest            # 506 tests, ~60s  (Windows: set PYTHONUTF8=1 first)
 ```
 
 ## Layout
 `hooze/{api,runtime,capabilities,config_engine,packs,llm,channels,payments,kernel}` · `migrations/` · `tests/` · `docs/`
 
 ## Bring up a staging environment
-1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0008`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts, `0008` operating modes, test chat, demo links and weekly reports.
+1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0009`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts, `0008` operating modes, test chat, demo links and weekly reports, `0009` digital products.
 2. `cp .env.example .env` and fill it (generate `VAULT_MASTER_KEY`, `PLATFORM_ADMIN_KEY`, `INTERNAL_CRON_SECRET`).
 3. `uvicorn hooze.main:app` (or the `Dockerfile`). One worker until `UPSTASH_*` is set.
 4. Onboard a tenant with the platform key:
@@ -66,7 +66,7 @@ business info first, WhatsApp pairing whenever the phone is in hand.
 - `LLM_PROVIDER_COOLDOWN_SECONDS` (default 30) — a provider that just failed is skipped for this long; `LLM_TIMEOUT_SECONDS` (default 20) is the per-call ceiling.
 
 ## Demo a prospect in 10 minutes (no WhatsApp needed)
-Six ready-made businesses live in `templates/demo/` (restaurant, retail, real estate, clinic, salon, school). One command creates the
+Seven ready-made businesses live in `templates/demo/` (restaurant, retail, real estate, clinic, salon, school, digital products). One command creates the
 client, puts it live with real AI replies, and prints a private demo link for the prospect:
 ```bash
 PLATFORM_ADMIN_KEY=... python -m scripts.demo_tenant --template salon --name "Their Salon" --staff-phone 080... --api https://your-api --go-live
@@ -84,6 +84,17 @@ knows where the API is. Pair a WhatsApp number later to put the same client on a
 - **Weekly report**: every Monday from 08:00 (client's timezone) the `/internal/tick` sweep sends each client's staff numbers their
   week in numbers. Preview or send now from the client's Overview tab. `WEEKLY_REPORT_ENABLED=false` turns it off.
 - Needs `migrations/0008_modes_demo_reports.sql`. Security review of this release: `docs/SESSION6_LAUNCH_AUDIT.md`.
+
+## Listings: links, photos, videos and brochures
+Each offering (a property, service or product) can carry a **link** (shown on its card) and **photos, MP4 videos and PDF brochures**
+(Setup → section 3; PDFs upload like photos). When a customer asks to see one ("send pictures", "yes" to "want to see it?"), the
+assistant sends the card and every file. It looks records up using the whole conversation (not only the last message), so short
+follow-ups keep working, and it is told which records really have photos.
+
+## Digital products (e-books, courses, templates)
+Give a product a **download link** (Setup → section 3, order businesses). Orders made only of digital products skip
+"pickup or delivery?", and the link is sent automatically the moment Paystack confirms the payment, never before (the AI never sees
+it). Needs `migrations/0009_digital_products.sql`.
 
 ## Adding a new kind of business
 - Fits an existing goal (`order` / `consult_and_book`)? **Write a `BusinessConfig`. No code.**

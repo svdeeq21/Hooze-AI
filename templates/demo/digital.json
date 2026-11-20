@@ -1,0 +1,35 @@
+{
+  "identity": {
+    "name": "Bright Notes Academy",
+    "industry": "digital products (e-books and online courses)",
+    "description": "Practical e-books and short video courses for Nigerian small-business owners: bookkeeping, pricing and selling online.",
+    "website": "https://example.com/brightnotes",
+    "timezone": "Africa/Lagos",
+    "currency": "NGN",
+    "facts": {"Instagram": "@brightnotesacademy (demo)", "Refunds": "Full refund within 7 days if the material isn't for you"}
+  },
+  "offerings": [
+    {"name": "Bookkeeping Made Simple (e-book)", "category": "E-books", "description": "A 60-page PDF guide with ready-to-use Excel templates", "price_minor": 750000,
+     "delivery_url": "https://example.com/brightnotes/download/bookkeeping-simple"},
+    {"name": "Price Like a Pro (e-book)", "category": "E-books", "description": "How to set prices that cover costs and still sell, with worked examples", "price_minor": 650000,
+     "delivery_url": "https://example.com/brightnotes/download/price-like-a-pro"},
+    {"name": "Sell on WhatsApp Masterclass", "category": "Courses", "description": "8 short video lessons plus a checklist. Lifetime access", "price_minor": 2500000,
+     "delivery_url": "https://example.com/brightnotes/courses/sell-on-whatsapp"},
+    {"name": "Business Starter Bundle", "category": "Bundles", "description": "Both e-books and the masterclass together", "price_minor": 3200000,
+     "delivery_url": "https://example.com/brightnotes/download/starter-bundle"}
+  ],
+  "faqs": [
+    {"question": "How do I get my e-book after paying?", "answer": "The download link is sent to you right here on WhatsApp the moment your payment is confirmed."},
+    {"question": "Can I pay by bank transfer?", "answer": "Payment is by card or bank transfer through the secure Paystack link we send at checkout."},
+    {"question": "Is there a refund?", "answer": "Yes. If the material isn't for you, you get a full refund within 7 days."}
+  ],
+  "sales_process": {"goal": "order", "notes": "Recommend the bundle when someone wants two or more items."},
+  "handoff": {"contact_name": "Tobi from Bright Notes", "staff_phones": ["2348000000007"]},
+  "communication": {
+    "tone": "friendly, encouraging and to the point",
+    "greeting": "Hi! 👋 Welcome to Bright Notes Academy. Are you looking for an e-book, a course, or not sure yet?",
+    "rules": ["Ask what the customer wants to get better at before recommending."]
+  },
+  "restrictions": {"never_say": ["guaranteed income", "get rich"], "prohibited_claims": ["certified", "accredited"]},
+  "integrations": {"payments": "paystack"}
+}

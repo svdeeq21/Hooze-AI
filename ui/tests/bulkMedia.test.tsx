@@ -23,18 +23,18 @@ describe("BulkMedia", () => {
   it("auto-matches by filename, flags the rest, and uploads only what is matched", async () => {
     const up = vi.spyOn(api, "uploadMedia").mockImplementation(async (_id, f) => ({ url: `https://cdn/${f.name}`, type: "image", bytes: 1, name: f.name }));
     const { onApply, input, user } = setup();
-    await user.upload(input, [file("jollof-rice-2.jpg"), file("jollof-rice-1.jpg"), file("chicken.png", "image/png"), file("random.jpg"), file("notes.pdf", "application/pdf")]);
+    await user.upload(input, [file("jollof-rice-2.jpg"), file("jollof-rice-1.jpg"), file("chicken.png", "image/png"), file("random.jpg"), file("notes.zip", "application/zip")]);
 
     expect(screen.getByText(/3 ready to upload/)).toBeTruthy();
     expect(screen.getByText(/1 need an item chosen/)).toBeTruthy();
     expect(screen.getByText(/1 can't be used/)).toBeTruthy();
     expect(screen.getByText(/Only photos/)).toBeTruthy();
-    const names = within(screen.getByRole("list")).getAllByText(/\.(jpg|png|pdf)$/).map((e) => e.textContent);
+    const names = within(screen.getByRole("list")).getAllByText(/\.(jpg|png|zip)$/).map((e) => e.textContent);
     expect(names.slice(0, 2)).toEqual(["chicken.png", "jollof-rice-1.jpg"]);                  // natural order: -1 before -2
 
     await user.click(screen.getByRole("button", { name: /upload 3 files/i }));
     await waitFor(() => expect(screen.getByText(/3 uploaded/)).toBeTruthy());
-    expect(up).toHaveBeenCalledTimes(3);                                                      // random.jpg and the pdf never leave the browser
+    expect(up).toHaveBeenCalledTimes(3);                                                      // random.jpg and the zip never leave the browser
     const applied = onApply.mock.calls.map(([i, urls]) => `${i}:${urls[0].split("/").pop()}`).sort();
     expect(applied).toEqual(["0:jollof-rice-1.jpg", "0:jollof-rice-2.jpg", "2:chicken.png"]);
   });

@@ -31,7 +31,7 @@ async def _write(db, op: str, fields: dict, present: dict, row_id=None):
     try:
         return await build({**fields, **present}).execute()
     except Exception as e:
-        if any(k in str(e).lower() for k in ("category", "media")):       # missing column(s): save the product without them
+        if any(k in str(e).lower() for k in ("category", "media", "delivery_url")):       # missing column(s): save the product without them
             return await build(fields).execute()
         raise
 
@@ -102,9 +102,12 @@ async def _seed_catalog(db, catalog: list[dict]) -> dict:
     for i, p in enumerate(catalog):
         fields = {"name": p["name"], "description": p["description"], "price_minor": p["price_minor"], "sort_order": i}
         present = {"category": p.get("category") or "", "media": p.get("media") or []}      # needs migration 0005
+        if p.get("delivery_url"):
+            present["delivery_url"] = p["delivery_url"]                                        # needs migration 0009
         row = existing.pop(p["name"], None)
         if row:
-            if _differs({**{"category": "", "media": []}, **row}, {**fields, **present}):
+            if _differs({**{"category": "", "media": [], "delivery_url": ""}, **row}, {**fields, **present, "delivery_url": p.get("delivery_url") or ""}):
+                present["delivery_url"] = p.get("delivery_url") or ""
                 await _write(db, "update", fields, present, row["id"])
                 stats["products_updated"] += 1
             product_id = row["id"]

@@ -120,7 +120,8 @@ export default function ChatPanel({ title, subtitle, suggestions = [], currency 
             : <div key={i} className={cx("max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-[14.5px] leading-snug",
                 l.from === "customer" ? "self-end rounded-tr-sm bg-bubble-out" : "self-start rounded-tl-sm bg-panel", l.from === "team" && "border border-dashed border-amber")}>
                 {l.url && /\.(jpe?g|png|webp|gif)(\?|$)/i.test(l.url) && <img src={l.url} alt="" className="mb-1 max-h-48 rounded-lg object-cover" loading="lazy" />}
-                {l.url && !/\.(jpe?g|png|webp|gif)(\?|$)/i.test(l.url) && <div className="mb-1 text-xs text-muted">▶ video</div>}
+                {l.url && /\.(pdf|docx?|xlsx?|pptx?|csv|txt|epub|zip)(\?|$)/i.test(l.url) && <div className="mb-1 text-xs text-muted">📄 {l.url.split("?")[0].split("/").pop()}</div>}
+                {l.url && /\.(mp4|mov|3gp)(\?|$)/i.test(l.url) && <div className="mb-1 text-xs text-muted">▶ video</div>}
                 {l.from === "team" && <div className="mb-0.5 text-[10px] uppercase tracking-wider text-amber">team</div>}
                 <Wa text={l.text} />
               </div>)}

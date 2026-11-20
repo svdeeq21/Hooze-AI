@@ -238,6 +238,9 @@ class OrderingCapability(Capability):
             its = await self.items(cart["id"]) if cart else []
             if not its:
                 raise BusinessRuleError("Your cart is empty — what would you like to order?")
+            if not cart.get("fulfillment_method") and await self._all_digital(its):
+                await self._touch(cart["id"], fulfillment_method="DIGITAL", delivery_address=None)     # nothing to collect or ship
+                cart["fulfillment_method"] = "DIGITAL"
             if not cart.get("fulfillment_method"):
                 raise BusinessRuleError("Before checkout — will this be pickup or delivery?")
             live = await self.load_catalog()                     # available products/options only
@@ -317,7 +320,7 @@ class OrderingCapability(Capability):
         cur = self.ctx.config.currency
         lines = ["MENU (only these exist; prices are fixed — you cannot change them):"]
         for p in await self.load_catalog():
-            lines.append(f"- {p['name']} ({fmt_money(p['price_minor'], cur)}): {p.get('description') or ''}".rstrip(": "))
+            lines.append(f"- {p['name']} ({fmt_money(p['price_minor'], cur)}){' [digital]' if p.get('delivery_url') else ''}: {p.get('description') or ''}".rstrip(": "))
             for g in p["groups"]:
                 mx = g.get("max_selections")
                 req = ("required, pick exactly 1" if g["selection"] == "single" and g.get("required") else "optional, pick 1" if g["selection"] == "single"
@@ -334,7 +337,9 @@ class OrderingCapability(Capability):
             lines.append(f"IN PROGRESS (not added yet — still missing something required): {cart['draft'].get('product_name')}")
         lines.append("\nORDERING RULES: (1) Only reference menu items by exact name. (2) A group's 'included free' limit is real: offer the extra via an Extras group instead of refusing. "
                      "(3) Before checkout you must know PICKUP or DELIVERY; delivery needs an address; payment covers food only — for delivery, a person confirms the fee AFTER payment. "
-                     "(4) Propose checkout only after fulfilment is set and the customer clearly confirmed they're done. (5) Never state totals; the system shows them.")
+                     "(4) Propose checkout only after fulfilment is set and the customer clearly confirmed they're done. (5) Never state totals; the system shows them. "
+                     "(6) Items marked [digital] are sent to the customer in this chat automatically the moment payment is confirmed: never ask pickup or "
+                     "delivery for a cart of only digital items, never promise a link before payment, and never make one up.")
         return "\n".join(lines)
 
     def check_reply(self, turn, reply: str, results: list) -> Optional[str]:
@@ -350,7 +355,16 @@ class OrderingCapability(Capability):
         its = await self.items(cart["id"]) if cart else []
         if not its:
             return "What would you like to order?"
+        if not cart.get("fulfillment_method") and await self._all_digital(its):
+            return "Want to add anything else, or are you ready to pay? It's sent to you right here as soon as payment goes through."
         return "Want to add anything else, or are you ready to checkout?" + ("" if cart.get("fulfillment_method") else " Also, pickup or delivery?")
+
+    async def _all_digital(self, items: list[dict]) -> bool:
+        """True if every line is a digital product (has a delivery link): such an order needs no pickup or delivery."""
+        if not items:
+            return False
+        by_id = {p["id"]: p for p in await self.load_catalog(include_unavailable=True)}
+        return all((by_id.get(it.get("product_id")) or {}).get("delivery_url") for it in items)
 
     # ── deterministic payment-pending gate ────────────────────────
     async def gate(self, turn) -> Optional[GateResult]:
@@ -427,17 +441,39 @@ class OrderingCapability(Capability):
         cur = self.ctx.config.currency
         its = await self.items(order["id"])
         summary = ", ".join(f"{i['quantity']}x {i['product_name']}" for i in its)
-        extra = f"\n🚴 DELIVERY to: {order.get('delivery_address') or '(no address)'}\n⚠️ Confirm the delivery fee with the customer — not yet charged." if order.get("fulfillment_method") == "DELIVERY" else "\n🏠 PICKUP"
+        method = order.get("fulfillment_method")
+        extra = (f"\n🚴 DELIVERY to: {order.get('delivery_address') or '(no address)'}\n⚠️ Confirm the delivery fee with the customer — not yet charged." if method == "DELIVERY"
+                 else "\n📩 DIGITAL: sent to the customer automatically" if method == "DIGITAL" else "\n🏠 PICKUP")
         late_note = (f"\n⚠️ This checkout had {'expired' if late == 'EXPIRED' else 'been cancelled'} before the customer paid — the money WAS received. Fulfil the order or refund it in Paystack.") if late else ""
-        await self.ctx.outbox.notify_staff(f"🔔 New paid order — {fmt_money(order['subtotal_minor'], cur)} (food only)\n{(contact or {}).get('display_name') or (contact or {}).get('phone')}\n{summary}{extra}{late_note}")
+        await self.ctx.outbox.notify_staff(f"🔔 New paid order — {fmt_money(order['subtotal_minor'], cur)}{'' if method == 'DIGITAL' else ' (food only)'}\n{(contact or {}).get('display_name') or (contact or {}).get('phone')}\n{summary}{extra}{late_note}")
         if contact:
             msg = format_receipt(self.ctx.config.persona.business_name, its, order["subtotal_minor"], order.get("fulfillment_method"), cur)
             # reply from the number this customer ordered on (a tenant may run several)
             convs = (await self.ctx.db.table("conversations").select("id,channel_id,last_inbound_at").eq("contact_id", contact["id"]).execute()).data or []
             conv = max(convs, key=lambda c: c.get("last_inbound_at") or "", default=None)
             await self.ctx.outbox.send(contact["phone"], msg, conv["channel_id"] if conv else None, conversation_id=conv["id"] if conv else None)
+            await self._deliver_digital(contact, its, conv)
         await self.ctx.events.info("ORDER_PAID", tenant_id=self.ctx.tenant_id, ref_type="order", ref_id=order["id"])
         return order
+
+    async def _deliver_digital(self, contact: dict, items: list[dict], conv: Optional[dict]) -> None:
+        """Paid and verified: send each digital product's link, once per product. A failure here is alerted, never retried blindly
+        (the payment webhook may be redelivered, but `won` above only lets the first confirmation reach this point)."""
+        by_id = {p["id"]: p for p in await self.load_catalog(include_unavailable=True)}
+        seen: set = set()
+        for it in items:
+            p = by_id.get(it.get("product_id")) or {}
+            url = (p.get("delivery_url") or "").strip()
+            if not url or p["id"] in seen:
+                continue
+            seen.add(p["id"])
+            try:
+                await self.ctx.outbox.send(contact["phone"], f"📩 Here's your *{p['name']}*:\n{url}\n\nSave this message so you can find it again. Enjoy!",
+                                           conv["channel_id"] if conv else None, conversation_id=conv["id"] if conv else None)
+                await self.ctx.events.info("DIGITAL_DELIVERED", tenant_id=self.ctx.tenant_id, ref_type="product", ref_id=p["id"])
+            except Exception as e:
+                await self.ctx.events.error("DIGITAL_DELIVERY_FAILED", tenant_id=self.ctx.tenant_id, ref_type="product", ref_id=p["id"], error=str(e)[:160])
+                await self.ctx.outbox.notify_staff(f"⚠️ A customer paid for *{p['name']}* but sending it failed. Please send it to +{contact['phone']} by hand.")
 
     async def tick(self) -> dict:
         cutoff = (self.ctx.clock() - timedelta(minutes=self.config.get("pending_expiry_minutes", 30))).isoformat()
