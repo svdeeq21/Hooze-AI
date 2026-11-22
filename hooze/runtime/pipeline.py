@@ -78,6 +78,9 @@ class ConfigLoader:
         return cfg
 
 
+TENANT_TTL = 10.0          # seconds a tenant row is cached by the pipeline
+
+
 class Pipeline:
     def __init__(self, *, platform_db, llm, events, adapters, configs: ConfigLoader, settings,
                  clock: Optional[Callable[[], datetime]] = None, sleep=asyncio.sleep, transcriber=None,
@@ -85,25 +88,53 @@ class Pipeline:
         self.pdb, self.llm, self.events, self.adapters, self.configs, self.settings = platform_db, llm, events, adapters, configs, settings
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep, self.transcriber, self.extras_for, self.raise_errors = sleep, transcriber, extras_for or (lambda tid: {}), raise_errors
+        self._tenants: dict = {}
 
     # ── public entry point ────────────────────────────────────────
-    async def handle_inbound(self, channel: dict, inbound: InboundMessage, *, replay: bool = False, attempt: Optional[int] = None) -> TurnOutcome:
-        """`replay=True`: this message came back from the durable queue after an interrupted attempt (see runtime/inbox.py)."""
+    async def handle_inbound(self, channel: dict, inbound: InboundMessage, *, replay: bool = False, attempt: Optional[int] = None,
+                             event: Optional[dict] = None) -> TurnOutcome:
+        """`replay=True`: this message came back from the durable queue after an interrupted attempt (see runtime/inbox.py).
+        `event`: its queue row, when it came through the queue (lets rapid-fire messages from one customer be answered together)."""
         trace = uuid.uuid4().hex[:12]
         tenant_id = channel["tenant_id"]
         try:
-            return await self._handle(channel, inbound, trace, replay, attempt)
+            return await self._handle(channel, inbound, trace, replay, attempt, event)
         except Exception as e:
             await self.events.error("TURN_CRASHED", tenant_id=tenant_id, trace_id=trace, error=str(e)[:300])
             if self.raise_errors:
                 raise
             return TurnOutcome("error", detail=str(e)[:200])
 
-    async def _handle(self, channel: dict, inbound: InboundMessage, trace: str, replay: bool = False, attempt: Optional[int] = None) -> TurnOutcome:
+    async def _tenant(self, tenant_id: str) -> Optional[dict]:
+        """The tenant row, cached for a few seconds: it was read on EVERY message. A suspension still takes effect within TENANT_TTL
+        (and immediately when made through the API, which calls forget_tenant)."""
+        hit = self._tenants.get(tenant_id)
+        if hit and time.monotonic() - hit[0] < TENANT_TTL:
+            return hit[1]
+        row = first(await self.pdb.table("tenants").select("*").eq("id", tenant_id).limit(1).execute())
+        self._tenants[tenant_id] = (time.monotonic(), row)
+        return row
+
+    def forget_tenant(self, tenant_id: str) -> None:
+        self._tenants.pop(tenant_id, None)
+
+    async def _newer_from_same_customer(self, channel: dict, phone: str, event: Optional[dict]) -> bool:
+        """Is another message from this customer already waiting behind this one? Then this one is answered together with it."""
+        if not event or not event.get("received_at") or not getattr(self.settings, "merge_quick_messages", True):
+            return False
+        try:
+            rows = (await self.pdb.table("inbound_events").select("id").eq("channel_id", channel["id"]).eq("contact_phone", phone)
+                    .gt("received_at", event["received_at"]).in_("status", ["pending", "processing"]).neq("id", event["id"]).limit(1).execute()).data
+            return bool(rows)
+        except Exception:
+            return False             # migration 0010 not applied, or a blip: answer this message on its own (the old behaviour)
+
+    async def _handle(self, channel: dict, inbound: InboundMessage, trace: str, replay: bool = False, attempt: Optional[int] = None,
+                      event: Optional[dict] = None) -> TurnOutcome:
         tenant_id = channel["tenant_id"]
         if inbound.from_me or inbound.is_group or not inbound.phone:
             return TurnOutcome("ignored", detail="own_group_or_no_phone")
-        tenant = first(await self.pdb.table("tenants").select("*").eq("id", tenant_id).limit(1).execute())
+        tenant = await self._tenant(tenant_id)
         if not tenant or tenant.get("status") != "active":
             return TurnOutcome("ignored", detail="tenant_inactive")
         cfg = await self.configs.load_active(tenant_id)
@@ -121,7 +152,7 @@ class Pipeline:
         async with distributed_lock(f"{tenant_id}:{phone}"):
             if phone in {normalize_phone(n) for n in cfg.staff_numbers}:
                 return await self._staff(adapter, tenant_id, caps, inbound, phone, trace)
-            return await self._customer(tenant, channel, adapter, db, store, cfg, caps, ctx, inbound, phone, trace, replay, attempt)
+            return await self._customer(tenant, channel, adapter, db, store, cfg, caps, ctx, inbound, phone, trace, replay, attempt, event)
 
     # ── staff (owner/manager) route: deterministic, never the LLM ──
     async def _staff(self, adapter, tenant_id, caps, inbound, phone, trace) -> TurnOutcome:
@@ -140,7 +171,8 @@ class Pipeline:
         return TurnOutcome("staff", reply=help_text, detail="unknown")
 
     # ── customer route ────────────────────────────────────────────
-    async def _customer(self, tenant, channel, adapter, db, store: ConversationStore, cfg: RuntimeConfig, caps, ctx, inbound, phone, trace, replay: bool = False, attempt: Optional[int] = None) -> TurnOutcome:
+    async def _customer(self, tenant, channel, adapter, db, store: ConversationStore, cfg: RuntimeConfig, caps, ctx, inbound, phone, trace, replay: bool = False,
+                        attempt: Optional[int] = None, event: Optional[dict] = None) -> TurnOutcome:
         tid = tenant["id"]
         t0 = time.perf_counter()
         contact, is_new = await store.get_or_create_contact(phone, guards.clean_name(inbound.push_name))
@@ -212,6 +244,12 @@ class Pipeline:
                 # "Hello Good evening" -> the welcome IS the answer. Asking the AI as well produced a second greeting that repeated the
                 # welcome's question in other words (real demo transcript). Also saves a model call.
                 return TurnOutcome("greeted", reply=cfg.first_contact_message)
+
+        # Rapid-fire messages ("Hi" / "I want a house" / "in Lekki" / "about 150m"): they used to get one AI reply EACH (measured: 5 messages,
+        # 5 replies, 5 AI calls). This message is already saved; if the customer's next one is already waiting, let that turn answer them all.
+        if await self._newer_from_same_customer(channel, phone, event):
+            await self.events.info("INBOUND_MERGED", tenant_id=tid, trace_id=trace)
+            return TurnOutcome("merged", detail="answered together with the customer's next message")
 
         if await store.count_recent_bot(conv["id"]) >= cfg.max_bot_replies_per_minute:
             await self.events.warn("RATE_LIMITED", tenant_id=tid, trace_id=trace)

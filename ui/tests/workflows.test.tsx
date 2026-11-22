@@ -209,6 +209,8 @@ describe("whatsapp and settings", () => {
     const user = userEvent.setup();
     await open(t.id, "whatsapp");
     await user.type(await screen.findByLabelText(/instance name/i), "lashes-main");
+    expect(screen.getByLabelText(/evolution api address/i)).toHaveValue("");          // no more localhost:8080 default (it 502'd on the live server)
+    await user.type(screen.getByLabelText(/evolution api address/i), "http://evo:8080");
     await user.type(screen.getByLabelText(/evolution api key/i), "evo-key-123");
     await user.click(screen.getByRole("button", { name: /add number/i }));
     expect(await screen.findByText(/webhook set/i)).toBeInTheDocument();

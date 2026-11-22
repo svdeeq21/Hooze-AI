@@ -50,7 +50,7 @@ class KnowledgeDoc:
         return hashlib.sha256(json.dumps([EMBED_RECIPE, recipe, self.title, self.content, self.kind, self.data, self.media, self.is_active], sort_keys=True, default=str).encode()).hexdigest()
 
 
-async def sync_documents(db, embedder, docs: list[KnowledgeDoc], *, source: str, concurrency: int = 4, recipe: str = "") -> dict:
+async def sync_documents(db, embedder, docs: list[KnowledgeDoc], *, source: str, concurrency: int = 10, recipe: str = "") -> dict:
     """Idempotent hash-diff sync. Only new/changed docs are embedded; docs missing from the feed are deactivated."""
     existing = {r["external_id"]: r for r in ((await db.table("knowledge_items").select("*").eq("source", source).execute()).data or [])}
     sem, stats = asyncio.Semaphore(concurrency), {"created": 0, "updated": 0, "unchanged": 0, "deactivated": 0, "failed": 0}
@@ -133,6 +133,48 @@ def media_note(it: dict) -> str:
     return ", ".join(w for w in words if w) + " on file (share_item sends them)"
 
 
+def _requirements(turn) -> tuple[Optional[int], set[str]]:
+    """(budget in minor units, area words) from the customer's recorded details, using the business's own question types."""
+    specs = ((turn.config.capabilities.get("qualification") or {}).get("slots") or [])
+    slots = ((turn.contact.get("attributes") or {}).get("slots") or {})
+    budget, area = None, set()
+    for s in specs:
+        v = slots.get(s.get("name"))
+        if v in (None, "", []):
+            continue
+        if s.get("type") == "money" and budget is None:
+            try:
+                budget = int(float(v)) * 100
+            except (TypeError, ValueError):
+                pass
+        elif any(k in (s.get("name") or "").lower() for k in ("location", "area", "city", "neighbourhood", "neighborhood", "state")):
+            area |= {w for w in re.findall(r"[a-z]+", str(v).lower()) if len(w) > 2 and w not in ("the", "and", "around", "near")}
+    return budget, area
+
+
+def rank_by_requirements(items: list[dict], turn) -> list[dict]:
+    """Within budget and in the stated area first; then the closest meaning. Over-budget records are kept only as fallbacks and are
+    labelled, so the assistant says so instead of presenting a ₦450m house to a ₦200m buyer as a fit."""
+    budget, area = _requirements(turn)
+    if budget is None and not area:
+        return items
+    ranked = []
+    for i, it in enumerate(items):
+        data = it.get("data") or {}
+        price = data.get("price_minor")
+        over = budget is not None and isinstance(price, (int, float)) and price > budget * 1.10
+        text = f"{it.get('title', '')} {it.get('content', '')} {data.get('location', '')}".lower()
+        in_area = bool(area) and any(w in text for w in area)
+        notes = []
+        if area:
+            notes.append("in the area they asked for" if in_area else "NOT in the area they asked for")
+        if budget is not None and isinstance(price, (int, float)):
+            notes.append("ABOVE their budget" if over else "within their budget")
+        ranked.append(((0 if in_area or not area else 1) + (2 if over else 0), i, {**it, "_fit": ", ".join(notes)}))
+    ranked.sort(key=lambda x: (x[0], x[1]))
+    return [it for _, _, it in ranked]
+
+
 @register
 class KnowledgeCapability(Capability):
     name = "knowledge"
@@ -149,8 +191,11 @@ class KnowledgeCapability(Capability):
     async def context(self, turn) -> str:
         try:
             emb = await turn.llm.embed(turn.tenant_id, search_text(turn), fail_fast=True)
-            params = {"p_embedding": emb, "p_threshold": self.config.get("threshold", 0.30), "p_count": self.config.get("top_k", 5), "p_kind": None}
-            items = (await turn.db.rpc("match_knowledge", params).execute()).data or []
+            top_k = self.config.get("top_k", 5)
+            # Ask for more candidates than we show, then rank by what the customer TOLD us (budget, area) before meaning-similarity:
+            # meaning-based search cannot do "under ₦200m" and, among 1,000 similar listings, easily ranks another area first.
+            params = {"p_embedding": emb, "p_threshold": self.config.get("threshold", 0.30), "p_count": max(top_k * 6, 30), "p_kind": None}
+            items = rank_by_requirements((await turn.db.rpc("match_knowledge", params).execute()).data or [], turn)[:top_k]
             items = items + await self._recent(turn, {it["id"] for it in items})
         except Exception as e:
             await turn.events.warn("KNOWLEDGE_LOOKUP_FAILED", tenant_id=turn.tenant_id, trace_id=turn.trace_id, error=str(e)[:160])
@@ -165,7 +210,8 @@ class KnowledgeCapability(Capability):
                  "to show it), propose share_item with its ref: it sends the full card and the files listed. Never hand the chat to a person "
                  "for this, and never offer photos a record doesn't have."]
         for ref, it in refs.items():
-            lines.append(f"[{ref}] {it.get('title', '')}: {(it.get('content') or '')[:500]} [{media_note(it)}]")
+            fit = it.get("_fit")
+            lines.append(f"[{ref}] {it.get('title', '')}: {(it.get('content') or '')[:500]} [{media_note(it)}]" + (f" [{fit}]" if fit else ""))
         return "\n".join(lines)
 
     async def after_turn(self, turn) -> None:

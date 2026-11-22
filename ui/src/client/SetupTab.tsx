@@ -8,6 +8,9 @@ import { BulkMedia } from "./BulkMedia";
 import { fixTarget, groupBySection, type SectionId, type SectionIssue } from "../lib/readiness";
 import { Badge, Button, Card, Field, Input, Loading, Select, Textarea, Toggle, useToast } from "../components/ui";
 import type { Mode } from "../lib/api";
+import { mergeOfferings, parseCsv, rowsToOfferings } from "../lib/csvImport";
+
+const PAGE = 25;          // editors rendered at once: 1,000 open product forms froze the page
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "full_auto", label: "Full auto", hint: "Answers every customer, takes orders and booking requests, and brings in a person when needed." },
@@ -55,6 +58,22 @@ function Form({ id, initial, version, name, go, fromDraft, draftSavedAt, onDraft
   // Applies to the LATEST draft (functional update), so several uploads finishing at once can't overwrite each other.
   const addMedia = (i: number, urls: string[]) => set((c) => { const t = c.offerings[i]; if (t) t.media.push(...urls.filter((u) => !t.media.includes(u))); });
   const goal = cfg.sales_process.goal;
+  const [find, setFind] = useState("");
+  const [showN, setShowN] = useState(PAGE);
+  const visible = useMemo(() => {
+    const q = find.trim().toLowerCase();
+    return cfg.offerings.map((o, i) => ({ o, i })).filter(({ o }) => !q || o.name.toLowerCase().includes(q) || o.category.toLowerCase().includes(q));
+  }, [cfg.offerings, find]);
+  async function importCsv(file: File) {
+    try {
+      const { offerings, skipped, columns } = rowsToOfferings(parseCsv(await file.text()));
+      if (!offerings.length) { toast("bad", "No items found. The first row must be column names, with a 'name' column."); return; }
+      let res = { added: 0, updated: 0 };
+      set((c) => { const m = mergeOfferings(c.offerings, offerings); c.offerings = m.merged; res = m; });
+      toast("ok", `Imported ${offerings.length} items (${res.added} new, ${res.updated} updated)${skipped ? `; ${skipped} rows without a name skipped` : ""}.`
+        + (columns.details.length ? ` Extra columns shown on cards: ${columns.details.join(", ")}.` : ""));
+    } catch (e) { toast("bad", `Couldn't read that file: ${errMsg(e)}`); }
+  }
 
   // keep derived fields consistent with the chosen goal
   useEffect(() => {
@@ -197,11 +216,22 @@ function Form({ id, initial, version, name, go, fromDraft, draftSavedAt, onDraft
       </Section>
 
       <Section {...sp("offer")} title={goal === "order" ? "3 · Menu / products" : "3 · What you offer"} action={<div className="flex gap-2"><Button size="sm" onClick={() => setBulk(true)} disabled={cfg.offerings.length === 0}>Bulk upload photos</Button><Button size="sm" onClick={() => set((c) => { c.offerings.push({ name: "", description: "", price_minor: null, price_note: "", category: "", url: "", media: [], details: {}, option_groups: [], delivery_url: "" }); })}>+ Add</Button></div>}>
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-line p-3 text-sm">
+          <span className="text-muted">Many items? Save your spreadsheet as CSV (columns like name, price, description, category, location, link, photos{goal === "order" ? ", download" : ""}) and import it.</span>
+          <label className="ml-auto inline-flex cursor-pointer items-center rounded-lg border border-line bg-raised px-3 py-1.5 text-xs hover:bg-line">
+            Import CSV<input type="file" accept=".csv,text/csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) importCsv(f); }} /></label>
+        </div>
         {cfg.offerings.length === 0 && <p className="text-sm text-muted">Nothing added yet.</p>}
-        <div className="space-y-4">{cfg.offerings.map((o, i) => (
+        {cfg.offerings.length > PAGE && (
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Input id="offer-search" value={find} onChange={(e) => { setFind(e.target.value); setShowN(PAGE); }} placeholder={`Search ${cfg.offerings.length} items by name or category`} className="max-w-sm" />
+            <span className="text-xs text-muted">Showing {Math.min(showN, visible.length)} of {visible.length}{find ? " matches" : ""}</span>
+          </div>)}
+        <div className="space-y-4">{visible.slice(0, showN).map(({ o, i }) => (
           <OfferingEditor key={i} o={o} order={goal === "order"} tenantId={id}
             onChange={(n) => set((c) => { c.offerings[i] = n; })} onRemove={() => set((c) => { c.offerings.splice(i, 1); })}
             onMediaAdd={(urls) => addMedia(i, urls)} onMediaRemove={(u) => set((c) => { const t = c.offerings[i]; if (t) t.media = t.media.filter((x) => x !== u); })} />))}</div>
+        {visible.length > showN && <Button size="sm" className="mt-3" onClick={() => setShowN((n) => n + PAGE)}>Show {Math.min(PAGE, visible.length - showN)} more</Button>}
       </Section>
 
       {goal === "consult_and_book" && (

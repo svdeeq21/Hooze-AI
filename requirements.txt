@@ -1,12 +1,14 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pydantic>=2.7
-pydantic-settings>=2.2
-httpx>=0.27
-supabase>=2.5
-google-genai>=0.3
-cryptography>=42
-dateparser>=1.2
-tzdata>=2024.1
-python-multipart>=0.0.9
-Pillow>=10.3
+# Version ranges are the ones the test suite passed on (Nov 2026). Upper bounds stop a routine deploy from silently pulling a new major or
+# minor release that changes behaviour. To upgrade: raise a bound, run `python -m pytest` (and `cd ui && npm test`), then deploy.
+fastapi>=0.139,<0.140
+uvicorn[standard]>=0.49,<0.50
+pydantic>=2.13,<3
+pydantic-settings>=2.14,<3
+httpx>=0.28.1,<0.29
+supabase>=2.10,<3
+google-genai>=1.73,<2
+cryptography>=46,<47
+dateparser>=1.5,<2
+tzdata>=2026.2
+python-multipart>=0.0.32,<0.1
+Pillow>=12.2,<13

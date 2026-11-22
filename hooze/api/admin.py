@@ -164,6 +164,8 @@ async def activate_config(tenant_id: str, request: Request, background: Backgrou
             raise HTTPException(503, {"message": res.error, "retryable": True, "seeded": res.seeded})     # a dependency failed, not the config
         raise HTTPException(422, {"message": "configuration is not ready to go live", "report": res.report.to_dict()})
     await c.pdb.table("tenants").update({"status": "active"}).eq("id", tenant_id).execute()
+    if hasattr(c.pipeline, "forget_tenant"):
+        c.pipeline.forget_tenant(tenant_id)
     try:        # the draft just became the live version; a leftover draft would shadow it on the next Setup load
         await c.pdb.for_tenant(tenant_id).table("tenant_configs").delete().eq("status", "draft").execute()
     except Exception as e:

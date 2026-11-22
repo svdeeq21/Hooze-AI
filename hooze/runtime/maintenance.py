@@ -49,6 +49,26 @@ async def check_channels(pdb, adapters, events, down: dict, now: float = 0.0, re
 from hooze.privacy import apply_retention
 
 
+async def purge_events(pdb, days: int, now, *, batch: int = 1000, max_batches: int = 20) -> int:
+    """The log table grows with every message (~5-10 rows each) and was never cleaned. Delete INFO rows older than `days` and everything
+    older than 3x `days` (warnings/errors are kept longer), in bounded batches so one run can never lock the table for long."""
+    from datetime import timedelta
+    deleted = 0
+    for severity_filter, cutoff in ((["INFO"], now - timedelta(days=days)), (None, now - timedelta(days=days * 3))):
+        for _ in range(max_batches):
+            q = pdb.table("events").select("id").lt("created_at", cutoff.isoformat())
+            if severity_filter:
+                q = q.in_("severity", severity_filter)
+            ids = [r["id"] for r in ((await q.limit(batch).execute()).data or [])]
+            if not ids:
+                break
+            await pdb.table("events").delete().in_("id", ids).execute()
+            deleted += len(ids)
+            if len(ids) < batch:
+                break
+    return deleted
+
+
 class Maintenance:
     def __init__(self, inbox, pdb, adapters, events, settings, clock):
         self.inbox, self.pdb, self.adapters, self.events, self.s, self.clock = inbox, pdb, adapters, events, settings, clock
@@ -56,6 +76,7 @@ class Maintenance:
         self._last_channel_check: Optional[float] = None
         self._last_purge: Optional[float] = None
         self._last_retention: Optional[float] = None
+        self._last_event_purge: Optional[float] = None
         self.startup_delay = 3.0
 
     async def run_once(self) -> dict:
@@ -79,6 +100,12 @@ class Maintenance:
                 out["purged"] = await self.inbox.purge()
             except Exception as e:
                 await self.events.error("MAINTENANCE_STEP_FAILED", step="purge", error=describe_exc(e))
+        if getattr(self.s, "event_retention_days", 0) > 0 and (self._last_event_purge is None or now - self._last_event_purge >= 3600):
+            self._last_event_purge = now
+            try:
+                out["events_purged"] = await purge_events(self.pdb, self.s.event_retention_days, self.clock())
+            except Exception as e:
+                await self.events.error("MAINTENANCE_STEP_FAILED", step="event_purge", error=describe_exc(e))
         if self.s.message_retention_days > 0 and (self._last_retention is None or now - self._last_retention >= 3600):
             self._last_retention = now
             try:

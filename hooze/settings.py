@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     inbound_lease_seconds: int = 180            # a worker that dies mid-turn is recovered after this long
     inbound_recovery_interval_seconds: int = 30
     inbound_recovery_min_age_seconds: int = 20  # never steal a row the webhook's own task is about to process
-    inbound_max_concurrency: int = 10           # simultaneous turns in this process (protects LLM rate limits)
+    inbound_max_concurrency: int = 40           # chats processed at the same time in this process. Turns mostly WAIT (AI, database, WhatsApp
+                                                # typing), so 40 costs little CPU; it is bounded by your AI provider's requests-per-minute limit.
+                                                # Measured (scripts/load_sim.py): at 10, a burst of 100 messages left customers waiting 25-46 s.
+    merge_quick_messages: bool = True           # answer a customer's rapid-fire messages together in one reply (needs migration 0010)
+    event_retention_days: int = 30              # INFO log rows older than this are deleted hourly (warnings/errors: 3x as long)
     inbound_retention_days: int = 7
     message_retention_days: int = 0      # 0 = keep chat history forever. Set N to delete messages older than N days (and the summaries built from them). Decide with your lawyer.
     # alerts (all optional; with none configured, alerts are only logged)

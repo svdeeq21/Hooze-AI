@@ -30,6 +30,11 @@ def create_app(container: Optional[Container] = None) -> FastAPI:
             if task:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+            for w in (c.writers or []):          # don't lose the last second of logs on a normal restart
+                try:
+                    await w.flush()
+                except Exception:
+                    pass
 
     app = FastAPI(title="Hooze Platform", version="0.1.0", lifespan=None if container else lifespan, docs_url=None if get_settings().is_production else "/docs")
     if container:

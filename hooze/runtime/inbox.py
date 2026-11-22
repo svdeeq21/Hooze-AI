@@ -22,26 +22,44 @@ class Inbox:
     def __init__(self, pdb, pipeline, adapters, events, settings, clock):
         self.pdb, self.pipeline, self.adapters, self.events, self.s, self.clock = pdb, pipeline, adapters, events, settings, clock
         self._sem = asyncio.Semaphore(max(1, settings.inbound_max_concurrency))
+        self._phone_column: Optional[bool] = None
 
     # ── enqueue (called by the webhook BEFORE it acknowledges) ───────────
-    async def enqueue(self, channel: dict, body: dict, provider_message_id: Optional[str]) -> tuple[Optional[str], bool]:
+    async def enqueue(self, channel: dict, body: dict, provider_message_id: Optional[str], phone: Optional[str] = None) -> tuple[Optional[str], bool]:
         """(event_id, is_new). A redelivery of a message we already hold returns (None, False). Any other DB error propagates so the
-        webhook answers 5xx instead of acknowledging a message it did not save."""
+        webhook answers 5xx instead of acknowledging a message it did not save.
+        `phone` (migration 0010) lets a customer's rapid-fire messages be answered together; without the column the row is saved without it."""
+        row = {"tenant_id": channel["tenant_id"], "channel_id": channel["id"], "provider_message_id": provider_message_id, "payload": body}
+        if phone and self._phone_column is not False:
+            row["contact_phone"] = phone
         try:
-            res = await self.pdb.table("inbound_events").insert({"tenant_id": channel["tenant_id"], "channel_id": channel["id"],
-                                                                 "provider_message_id": provider_message_id, "payload": body}).execute()
+            res = await self.pdb.table("inbound_events").insert(row).execute()
         except Exception as e:
             if is_unique_violation(e):
                 return None, False
-            raise
+            if "contact_phone" in row and "contact_phone" in str(e).lower():
+                self._phone_column = False                  # migration 0010 not applied yet: never lose a message over an optional column
+                row.pop("contact_phone")
+                try:
+                    res = await self.pdb.table("inbound_events").insert(row).execute()
+                except Exception as e2:
+                    if is_unique_violation(e2):
+                        return None, False
+                    raise
+            else:
+                raise
         return res.data[0]["id"], True
 
     # ── processing ───────────────────────────────────────────────────────
     async def process(self, event_id: str) -> str:
         """Claim and run ONE row (the webhook's own background task). Never raises."""
         try:
-            row = first(await self.pdb.rpc("claim_inbound_event", {"p_id": event_id, "p_lease_seconds": self.s.inbound_lease_seconds}).execute())
-            return await self._run(row) if row else "skipped"
+            async with self._sem:
+                # Claim only once a slot is free. Claiming first and then waiting for a slot started the lease clock early: in a big burst a
+                # message could wait past its lease, be re-claimed by the recovery loop and be processed twice (the reply guard prevented a
+                # double answer, but the work and the AI call were wasted).
+                row = first(await self.pdb.rpc("claim_inbound_event", {"p_id": event_id, "p_lease_seconds": self.s.inbound_lease_seconds}).execute())
+                return await self._execute(row) if row else "skipped"
         except Exception as e:
             await self.events.error("INBOUND_PROCESS_ERROR", event_id=event_id, error=describe_exc(e))
             return "error"
@@ -58,31 +76,34 @@ class Inbox:
 
     async def _run(self, row: dict) -> str:
         async with self._sem:
-            attempt = row["attempts"]
-            tid = row["tenant_id"]
-            try:
-                channel = first(await self.pdb.table("channels").select("*").eq("id", row["channel_id"]).limit(1).execute())
-                if not channel or channel["status"] != "active":
-                    return await self._finish(row, "done", "channel_inactive")
-                inbound = self.adapters.for_channel(channel).parse(row["payload"])
-                if inbound is None:
-                    return await self._finish(row, "done", "unparseable")
-                outcome = await self.pipeline.handle_inbound(channel, inbound, replay=attempt > 1, attempt=attempt)
-                if getattr(outcome, "status", None) == "error":           # pipeline already logged TURN_CRASHED; this is a retryable failure
-                    raise RuntimeError(getattr(outcome, "detail", "") or "turn crashed")
-                return await self._finish(row, "done", None)
-            except Exception as e:
-                msg = describe_exc(e, 300)
-                if attempt >= self.s.inbound_max_attempts:
-                    await self.pdb.table("inbound_events").update({"status": "failed", "last_error": msg, "locked_until": None, "finished_at": self.clock().isoformat()}).eq("id", row["id"]).execute()
-                    await self.events.error("INBOUND_FAILED", tenant_id=tid, ref_type="inbound_event", ref_id=row["id"], attempts=attempt, error=msg)
-                    return "failed"
-                from datetime import timedelta
-                backoff = min(30 * 2 ** (attempt - 1), 600)                  # 30s, 60s, 120s, 240s ... a transient outage must not burn every attempt in two minutes
-                await self.pdb.table("inbound_events").update({"status": "pending", "last_error": msg,
-                                                               "locked_until": (self.clock() + timedelta(seconds=backoff)).isoformat()}).eq("id", row["id"]).execute()
-                await self.events.warn("INBOUND_RETRY", tenant_id=tid, ref_type="inbound_event", ref_id=row["id"], attempt=attempt, error=msg)
-                return "retry"
+            return await self._execute(row)
+
+    async def _execute(self, row: dict) -> str:
+        attempt = row["attempts"]
+        tid = row["tenant_id"]
+        try:
+            channel = first(await self.pdb.table("channels").select("*").eq("id", row["channel_id"]).limit(1).execute())
+            if not channel or channel["status"] != "active":
+                return await self._finish(row, "done", "channel_inactive")
+            inbound = self.adapters.for_channel(channel).parse(row["payload"])
+            if inbound is None:
+                return await self._finish(row, "done", "unparseable")
+            outcome = await self.pipeline.handle_inbound(channel, inbound, replay=attempt > 1, attempt=attempt, event=row)
+            if getattr(outcome, "status", None) == "error":           # pipeline already logged TURN_CRASHED; this is a retryable failure
+                raise RuntimeError(getattr(outcome, "detail", "") or "turn crashed")
+            return await self._finish(row, "done", None)
+        except Exception as e:
+            msg = describe_exc(e, 300)
+            if attempt >= self.s.inbound_max_attempts:
+                await self.pdb.table("inbound_events").update({"status": "failed", "last_error": msg, "locked_until": None, "finished_at": self.clock().isoformat()}).eq("id", row["id"]).execute()
+                await self.events.error("INBOUND_FAILED", tenant_id=tid, ref_type="inbound_event", ref_id=row["id"], attempts=attempt, error=msg)
+                return "failed"
+            from datetime import timedelta
+            backoff = min(30 * 2 ** (attempt - 1), 600)                  # 30s, 60s, 120s, 240s ... a transient outage must not burn every attempt in two minutes
+            await self.pdb.table("inbound_events").update({"status": "pending", "last_error": msg,
+                                                           "locked_until": (self.clock() + timedelta(seconds=backoff)).isoformat()}).eq("id", row["id"]).execute()
+            await self.events.warn("INBOUND_RETRY", tenant_id=tid, ref_type="inbound_event", ref_id=row["id"], attempt=attempt, error=msg)
+            return "retry"
 
     async def _finish(self, row: dict, status: str, note: Optional[str]) -> str:
         await self.pdb.table("inbound_events").update({"status": status, "last_error": note, "locked_until": None, "finished_at": self.clock().isoformat()}).eq("id", row["id"]).execute()

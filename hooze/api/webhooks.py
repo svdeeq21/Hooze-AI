@@ -69,7 +69,7 @@ async def whatsapp_webhook(channel_id: str, request: Request, background: Backgr
         background.add_task(c.pipeline.handle_inbound, channel, inbound)
         return {"status": "accepted"}
     try:
-        event_id, is_new = await c.inbox.enqueue(channel, body, inbound.provider_message_id)
+        event_id, is_new = await c.inbox.enqueue(channel, body, inbound.provider_message_id, phone="".join(ch for ch in inbound.phone if ch.isdigit()))
     except Exception as e:
         # We could NOT save the message. Say so (5xx) rather than acknowledge something we would lose; the alert rules pick this up.
         await c.events.error("INBOUND_ENQUEUE_FAILED", tenant_id=channel["tenant_id"], channel_id=channel_id, error=str(e)[:200])

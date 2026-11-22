@@ -27,6 +27,7 @@ class Container:
     maintenance: Any = None      # recovery + monitoring loop
     alerts: Any = None           # AlertManager
     media: Any = None            # media storage (hooze/media/storage.py); None => uploads answer 503
+    writers: Any = None          # background batch writers (events, usage) flushed on shutdown
 
     def extras_for(self, tenant_id: str) -> dict:
         return {"payments": functools.partial(self.payments_for, tenant_id)}
@@ -40,17 +41,19 @@ async def build_container(settings) -> Container:
     """Production wiring. Kept out of import time so tests never need supabase / google-genai."""
     from hooze.channels.base import AdapterFactory
     from hooze.kernel.db import get_client
-    from hooze.kernel.events import EventBus, db_sink, stdout_sink
+    from hooze.kernel.events import BufferedInserter, EventBus, buffered_db_sink, stdout_sink
     from hooze.llm.gateway import build_default_gateway
     from hooze.payments.paystack import PaystackProvider
     from hooze.runtime.pipeline import ConfigLoader, Pipeline
 
     pdb = PlatformDB(await get_client())
-    events = EventBus([stdout_sink, db_sink(pdb)])
+    # Log rows and usage metering are written in background batches, never on the customer's time (see BufferedInserter).
+    event_writer, usage_writer = BufferedInserter(pdb, "events"), BufferedInserter(pdb, "usage_events")
+    events = EventBus([stdout_sink, buffered_db_sink(event_writer)])
     vault = Vault(settings.vault_master_key)
 
     async def usage(tenant_id: str, kind: str, qty: float, meta: dict) -> None:
-        await pdb.table("usage_events").insert({"tenant_id": tenant_id, "kind": kind, "quantity": qty, "metadata": meta}).execute()
+        usage_writer.add({"tenant_id": tenant_id, "kind": kind, "quantity": qty, "metadata": meta})
 
     llm = build_default_gateway(settings, usage=usage, events=events)
     adapters, configs = AdapterFactory(vault), ConfigLoader(pdb)
@@ -62,6 +65,7 @@ async def build_container(settings) -> Container:
         return PaystackProvider(vault.decrypt(row["credentials_enc"]), (row.get("config") or {}).get("email_domain", "hooze-orders.com"))
 
     c = Container(settings=settings, pdb=pdb, llm=llm, events=events, adapters=adapters, configs=configs, pipeline=None, vault=vault, payments_for=payments_for)
+    c.writers = [event_writer, usage_writer]
     from hooze.llm.transcription import GroqWhisper
     transcriber = GroqWhisper(settings.groq_api_key) if settings.groq_api_key else None
     if settings.supabase_url and settings.supabase_service_role_key:

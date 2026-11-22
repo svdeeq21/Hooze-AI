@@ -80,7 +80,7 @@ def compile_config(bc: BusinessConfig, version: int = 1) -> Compiled:
                             "groups": [{"name": g.name, "selection": g.selection, "required": g.required, "max_selections": g.max_included,
                                         "options": [{"name": c.name, "price_minor": c.price_minor} for c in g.options]} for g in o.option_groups]})
         else:
-            data = {"price": price, **o.details, **({"url": o.url} if o.url else {})}
+            data = {"price": price, **o.details, **({"url": o.url} if o.url else {}), **({"price_minor": o.price_minor} if o.price_minor is not None else {})}
             body = " ".join(filter(None, [o.description, *(f"{k}: {v}" for k, v in o.details.items()), f"Price: {price}"]))
             docs.append(KnowledgeDoc(external_id=f"offering:{_slug(o.name)}", kind="offering", title=o.name, content=body, data=data,
                                      media=[{"type": media_type(u), "url": u} for u in o.media]))

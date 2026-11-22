@@ -8,10 +8,14 @@ Registered BEFORE `admin.router` so literal paths (e.g. `.../conversations/{id}/
 """
 from __future__ import annotations
 import asyncio
+import ipaddress
+import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
@@ -30,6 +34,7 @@ from hooze.runtime.tenant_runtime import build_tenant_runtime
 from hooze.security import new_secret, sha256_hex
 
 router = APIRouter()
+log = logging.getLogger("hooze.operator")
 
 ORDER_STATUSES = ["CART", "PAYMENT_PENDING", "PAID", "PREPARING", "READY", "COMPLETED", "CANCELLED", "EXPIRED"]
 PAID_STATUSES = ["PAID", "PREPARING", "READY", "COMPLETED"]
@@ -151,6 +156,8 @@ async def patch_tenant(tenant_id: str, body: TenantPatch, request: Request):
     if not fields:
         raise HTTPException(422, "nothing to change")
     row = first(await c.pdb.table("tenants").update(fields).eq("id", tenant_id).execute())
+    if hasattr(c.pipeline, "forget_tenant"):
+        c.pipeline.forget_tenant(tenant_id)              # a suspension must take effect on the very next message
     await c.events.info("TENANT_UPDATED", tenant_id=tenant_id, **fields)
     return {"tenant": row}
 
@@ -228,6 +235,8 @@ async def delete_tenant(tenant_id: str, request: Request, confirm: str = ""):
             failed.append({"instance": ch.get("instance_name"), "error": str(e)[:160]})
     await c.pdb.table("tenants").delete().eq("id", tenant_id).execute()
     c.configs.invalidate(tenant_id)
+    if hasattr(c.pipeline, "forget_tenant"):
+        c.pipeline.forget_tenant(tenant_id)
     await c.events.warn("TENANT_DELETED", slug=t["slug"], name=t["name"], deleted_tenant_id=tenant_id, files_deleted=files,
                         instances_deleted=instances, instances_failed=failed)                    # no tenant_id: the row is gone
     return {"deleted": True, "slug": t["slug"], "files_deleted": files, "instances_deleted": instances, "instances_to_remove_by_hand": failed}
@@ -319,6 +328,69 @@ class ProvisionIn(BaseModel):
     webhook_base_url: Optional[str] = None  # how EVOLUTION reaches hooze-core (e.g. http://host.docker.internal:8000); defaults to PUBLIC_BASE_URL
 
 
+_LOCAL_HOSTS = {"localhost", "0.0.0.0", "::1", "host.docker.internal", "gateway.docker.internal"}
+
+
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def _is_local(url: str) -> bool:
+    """An address that only means something on ONE machine (or inside Docker on it)."""
+    h = _host(url)
+    return h in _LOCAL_HOSTS or h.startswith("127.") or h.endswith((".localhost", ".local", ".internal"))
+
+
+def _is_public(url: str) -> bool:
+    """On the open internet (e.g. https://evo.onrender.com). Bare names like 'evo' (a Docker service) and private IPs are not."""
+    h = _host(url)
+    if not h or "." not in h or _is_local(url):
+        return False
+    try:
+        return ipaddress.ip_address(h).is_global
+    except ValueError:
+        return True
+
+
+def _full_url(url: Optional[str], what: str) -> str:
+    u = (url or "").strip().rstrip("/")
+    if urlparse(u).scheme not in ("http", "https") or not _host(u):
+        raise HTTPException(400, f"{what} must be a full address starting with https:// (for example https://your-evolution.onrender.com), not '{(url or '')[:80]}'.")
+    return u
+
+
+def _webhook_base(c, given: Optional[str], evolution_url: str) -> str:
+    """Where Evolution will POST customer messages. Refuse combinations that can never work, BEFORE anything is created:
+    an Evolution server on the internet cannot reach 'localhost' / 'host.docker.internal' (the old dashboard default)."""
+    base = (given or "").strip() or c.settings.public_base_url
+    if not base:
+        raise HTTPException(400, "Fill in 'How Evolution reaches hooze-core' with this server's public https address, or set PUBLIC_BASE_URL on the server.")
+    base = _full_url(base, "'How Evolution reaches hooze-core'")
+    if _is_local(base) and _is_public(evolution_url):
+        public = c.settings.public_base_url or "this server's public https address"
+        raise HTTPException(400, f"Evolution at {evolution_url} is on the internet, so it cannot reach {base} (that address only exists on one machine) "
+                                 f"and customer messages would never arrive. Leave 'How Evolution reaches hooze-core' empty to use {public}.")
+    return base
+
+
+def _evolution_error(e: Exception, base: str, name: str) -> str:
+    """Turn 'All connection attempts failed' into something the person at the dashboard can act on."""
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+        if _is_local(base):
+            return (f"Could not reach Evolution at {base}. On the live server 'localhost' means the Hooze server itself, not your computer: "
+                    "enter your Evolution server's public address (for example https://your-evolution.onrender.com).")
+        return f"Could not reach Evolution at {base}. Check the address is right and that the Evolution server is running."
+    if isinstance(e, httpx.TimeoutException):
+        return f"Evolution at {base} did not answer in time. If it is on a free plan it may be waking up: wait a minute and try again."
+    text = str(e)
+    low = text.lower()
+    if " 401" in text or "unauthorized" in low:
+        return "Evolution refused the API key. Use the AUTHENTICATION_API_KEY set on your Evolution server."
+    if "already in use" in low or "already exists" in low:
+        return (f"Evolution already has an instance called '{name}'. Pick another name, or turn off 'Create this instance' to connect the existing one.")
+    return f"Evolution would not create the instance: {text[:200]}"
+
+
 async def _set_webhook(c, channel: dict, secret: str, webhook_base: str) -> str:
     url = f"{webhook_base.rstrip('/')}/v1/webhooks/whatsapp/{channel['id']}"
     await c.adapters.for_channel(channel).set_webhook(url, {"x-hooze-secret": secret})
@@ -330,16 +402,21 @@ async def provision_channel(tenant_id: str, body: ProvisionIn, request: Request)
     """One call: (optionally create the Evolution instance) -> channel row -> webhook pointed at us with a fresh secret."""
     c = get_container(request)
     await _tenant_or_404(c, tenant_id)
+    evolution_url = _full_url(body.base_url, "Evolution API address")
+    base = _webhook_base(c, body.webhook_base_url, evolution_url)
+    name = body.instance_name.strip()
     if body.create_instance:
         try:
-            await create_evolution_instance(body.base_url, body.api_key, body.instance_name)
+            await create_evolution_instance(evolution_url, body.api_key.strip(), name)
         except Exception as e:
-            raise HTTPException(502, f"could not create the Evolution instance: {str(e)[:200]}")
+            msg = _evolution_error(e, evolution_url, name)
+            log.warning("Evolution instance create failed for tenant %s at %s: %r", tenant_id, evolution_url, e)    # it used to fail silently in the logs
+            await c.events.warn("EVOLUTION_CREATE_FAILED", tenant_id=tenant_id, error=msg[:200])
+            raise HTTPException(502, msg)
     secret = new_secret()
     ch = first(await c.pdb.table("channels").insert({
-        "tenant_id": tenant_id, "kind": "whatsapp_evolution", "instance_name": body.instance_name, "config": {"base_url": body.base_url},
-        "credentials_enc": c.vault.encrypt(body.api_key), "secret_hash": sha256_hex(secret), "status": "active"}).execute())
-    base = body.webhook_base_url or c.settings.public_base_url
+        "tenant_id": tenant_id, "kind": "whatsapp_evolution", "instance_name": name, "config": {"base_url": evolution_url},
+        "credentials_enc": c.vault.encrypt(body.api_key.strip()), "secret_hash": sha256_hex(secret), "status": "active"}).execute())
     try:
         url = await _set_webhook(c, ch, secret, base)
         wired = True
@@ -387,9 +464,10 @@ async def reconnect_webhook(tenant_id: str, channel_id: str, body: WebhookIn, re
     and only store the new hash once that worked, so a failure leaves the old (working) pair intact."""
     c = get_container(request)
     ch = await _channel_or_404(c, tenant_id, channel_id)
+    base = _webhook_base(c, body.webhook_base_url, (ch.get("config") or {}).get("base_url") or "")
     secret = new_secret()
     try:
-        url = await _set_webhook(c, ch, secret, body.webhook_base_url or c.settings.public_base_url)
+        url = await _set_webhook(c, ch, secret, base)
     except Exception as e:
         raise HTTPException(502, f"Evolution rejected the webhook update: {str(e)[:200]}")
     await c.pdb.table("channels").update({"secret_hash": sha256_hex(secret)}).eq("id", channel_id).eq("tenant_id", tenant_id).execute()

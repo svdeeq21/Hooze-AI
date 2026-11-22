@@ -6,14 +6,14 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the design, audit trace
 ## Run the tests (no network, no Supabase needed)
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 506 tests, ~60s  (Windows: set PYTHONUTF8=1 first)
+python -m pytest            # 517 tests, ~60s  (Windows: set PYTHONUTF8=1 first)
 ```
 
 ## Layout
 `hooze/{api,runtime,capabilities,config_engine,packs,llm,channels,payments,kernel}` · `migrations/` · `tests/` · `docs/`
 
 ## Bring up a staging environment
-1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0009`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts, `0008` operating modes, test chat, demo links and weekly reports, `0009` digital products.
+1. Create a Supabase project; run **every** file in `migrations/` in order (`0001` … `0010`). Each later file is required by the code: `0002` activation, `0003` the inbound queue, `0004` dashboard counts, `0005` menu categories and product photos/videos (activation still works without it, but menus have no sections or media until it is run), `0006` API key roles, `0007` setup drafts, `0008` operating modes, test chat, demo links and weekly reports, `0009` digital products, `0010` scale (merging rapid messages, log clean-up indexes).
 2. `cp .env.example .env` and fill it (generate `VAULT_MASTER_KEY`, `PLATFORM_ADMIN_KEY`, `INTERNAL_CRON_SECRET`).
 3. `uvicorn hooze.main:app` (or the `Dockerfile`). One worker until `UPSTASH_*` is set.
 4. Onboard a tenant with the platform key:
@@ -91,10 +91,26 @@ Each offering (a property, service or product) can carry a **link** (shown on it
 assistant sends the card and every file. It looks records up using the whole conversation (not only the last message), so short
 follow-ups keep working, and it is told which records really have photos.
 
+## Big catalogs (1,000+ items)
+- **Import:** Setup → section 3 → *Import CSV* (columns by name: name, price, description, category, link, photos, download; any other
+  column, e.g. location or bedrooms, becomes a detail on the card). Re-importing an updated sheet updates items by name. The list is
+  searchable and shows 25 at a time.
+- **Shops:** up to 40 items the whole menu goes to the AI; above that, only the sections and the items that match the conversation
+  (1,000 items: under 4,000 tokens per message instead of ~20,000). Any item can still be ordered by name; "show me the menu" sends
+  the sections, then the one the customer picks.
+- **Listings:** the 30 closest matches are re-ranked by the customer's stated budget and area; over-budget ones are labelled so the
+  assistant says so. Going live indexes 10 listings at a time (1,000 listings: about 30 s the first time; later only changed ones).
+
 ## Digital products (e-books, courses, templates)
 Give a product a **download link** (Setup → section 3, order businesses). Orders made only of digital products skip
 "pickup or delivery?", and the link is sent automatically the moment Paystack confirms the payment, never before (the AI never sees
 it). Needs `migrations/0009_digital_products.sql`.
+
+## Capacity: measure before you guess
+`python -m scripts.load_sim` runs the real engine (queue, locks, every database call, prompts) with realistic delays for the database,
+the AI and WhatsApp, under: 100 messages at once across 10 clients, 5 customers on one client, one customer typing 5 quick messages, a
+250-message conversation, and a 150-item menu. `--db-ms 120` shows a server and database in different regions; `--concurrency 10` the old
+limit. Measured on this version (30 ms database, 1.8 s AI): 100 simultaneous messages all answered, median first reply 7.3 s, slowest 11 s.
 
 ## Adding a new kind of business
 - Fits an existing goal (`order` / `consult_and_book`)? **Write a `BusinessConfig`. No code.**

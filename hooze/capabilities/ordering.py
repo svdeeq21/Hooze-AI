@@ -64,6 +64,49 @@ class _NoArgs(BaseModel):
     pass
 
 
+class _Menu(BaseModel):
+    category: str = Field("", description="optional: one menu section to send (for a big menu)")
+
+
+MENU_INLINE_MAX = 40       # up to this many items the whole menu goes to the AI; above it, only the items relevant to the conversation
+MENU_RELEVANT_MAX = 25
+_STOP = frozenset("""the and for with you have what want like please can get some any need give how much price cost is are do does was
+a an of to in on me my i it this that your our from just also one two three four five six pls abeg dey wan""".split())
+
+
+def _words(text: str) -> set[str]:
+    out = set()
+    for w in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if w in _STOP or (len(w) < 3 and not w.isdigit()):
+            continue
+        out.add(w[:-1] if len(w) > 3 and w.endswith("s") else w)        # "burgers" ~ "burger"
+    return out
+
+
+def relevant_products(catalog: list[dict], query: str, keep_ids: set, limit: int = MENU_RELEVANT_MAX) -> list[dict]:
+    """The items worth showing the AI for THIS conversation: what's in the cart, then the best word matches (name counts most)."""
+    q = _words(query)
+    scored = []
+    for p in catalog:
+        name, rest = _words(p.get("name", "")), _words(f"{p.get('category', '')} {p.get('description', '')}")
+        score = 3 * len(q & name) + len(q & rest) + (100 if p["id"] in keep_ids else 0)
+        if score:
+            scored.append((score, p.get("sort_order", 0), p))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [p for _, _, p in scored[:limit]]
+
+
+def menu_sections(catalog: list[dict]) -> list[tuple[str, int]]:
+    order, count = [], {}
+    for p in catalog:
+        c = (p.get("category") or "").strip() or "Other"
+        if c not in count:
+            order.append(c)
+            count[c] = 0
+        count[c] += 1
+    return [(c, count[c]) for c in order]
+
+
 class _Show(BaseModel):
     product_name: str = Field("", description="exact menu item name")
 
@@ -288,8 +331,23 @@ class OrderingCapability(Capability):
             msg = format_checkout(its, amount, cart.get("fulfillment_method"), cart.get("delivery_address"), init["authorization_url"], cur())
             return ToolResult(message=msg, data={"order_id": cart["id"]})
 
-        async def show_menu(turn, a: _NoArgs) -> ToolResult:
-            chunks = format_menu(self.ctx.config.persona.business_name, await self.load_catalog(), cur())
+        async def show_menu(turn, a: _Menu) -> ToolResult:
+            catalog = await self.load_catalog()
+            biz = self.ctx.config.persona.business_name
+            if a.category.strip():
+                want = _words(a.category)
+                section = [p for p in catalog if want & _words(p.get("category") or "")] or [p for p in catalog if want & _words(p.get("name", ""))]
+                if section:
+                    catalog = section[:80]
+            if len(catalog) > MENU_INLINE_MAX * 2:
+                # 1,000 items would be dozens of WhatsApp messages. Send the sections and let the customer choose.
+                secs = menu_sections(catalog)
+                if len(secs) > 1:
+                    lines = "\n".join(f"• {c} ({n})" for c, n in secs[:40])
+                    return ToolResult(message=f"📋 *{biz} — Menu*\nWe have {len(catalog)} items in {len(secs)} sections:\n{lines}\n\n"
+                                              "👉 Tell me a section, or just name what you want, and I'll send it.")
+                catalog = catalog[:MENU_INLINE_MAX]
+            chunks = format_menu(biz, catalog, cur())
             for c in chunks[:-1]:                                  # a long menu goes out as several tidy messages
                 await turn.out.text(c, typing=False)
             return ToolResult(message=chunks[-1])
@@ -306,7 +364,8 @@ class OrderingCapability(Capability):
             return ToolResult(message=format_item_caption(p, cur()) + "\n\nWould you like me to add it to your order?")
 
         return [
-            Tool("show_menu", "send the customer the full, nicely laid-out menu with prices — use whenever they ask what you offer, for the menu, or for prices; never type the menu yourself", _NoArgs, show_menu, self.name),
+            Tool("show_menu", "send the customer the nicely laid-out menu with prices (for a big menu: its sections; with category: that one section) — "
+                 "use whenever they ask what you offer, for the menu, a section, or prices; never type the menu yourself", _Menu, show_menu, self.name),
             Tool("show_item", "send photos/videos and details of ONE menu item (product_name) — use when the customer asks to see a picture or video, or wants more detail on a single item", _Show, show_item, self.name),
             Tool("add_product", "add a product (with any chosen options) to the order; call it as soon as a product is named, even with no options yet", _Add, add_product, self.name),
             Tool("remove_item", "remove cart line number N", _Line, remove_item, self.name),
@@ -318,8 +377,25 @@ class OrderingCapability(Capability):
     # ── prompt context, guards, next step ─────────────────────────
     async def context(self, turn) -> str:
         cur = self.ctx.config.currency
-        lines = ["MENU (only these exist; prices are fixed — you cannot change them):"]
-        for p in await self.load_catalog():
+        catalog = await self.load_catalog()
+        cart = await self.find_cart(turn.contact["id"])
+        cart_items = await self.items(cart["id"]) if cart else []
+        if len(catalog) <= MENU_INLINE_MAX:
+            shown = catalog
+            lines = ["MENU (only these exist; prices are fixed — you cannot change them):"]
+        else:
+            # A big menu (measured: 1,000 items = ~20,000 tokens on EVERY message) is not sent whole. The AI gets the sections and the
+            # items that match this conversation; add_product / show_item still find ANY item on the full menu by its name.
+            hist = turn.history or []
+            query = " ".join([turn.text, next((m.get("content") or "" for m in reversed(hist) if m.get("sender_type") == "bot"), "")[:400],
+                              *[m.get("content") or "" for m in hist if m.get("sender_type") == "contact"][-2:],
+                              ((cart or {}).get("draft") or {}).get("product_name", "")])
+            shown = relevant_products(catalog, query, {it.get("product_id") for it in cart_items})
+            secs = ", ".join(f"{c} ({n})" for c, n in menu_sections(catalog))
+            lines = [f"MENU: {len(catalog)} items, too many to list here. Sections: {secs}.",
+                     "Items matching this conversation (prices are fixed — you cannot change them):" if shown else
+                     "No item matches the conversation yet: ask what they'd like, or propose show_menu (with a category to send one section)."]
+        for p in shown:
             lines.append(f"- {p['name']} ({fmt_money(p['price_minor'], cur)}){' [digital]' if p.get('delivery_url') else ''}: {p.get('description') or ''}".rstrip(": "))
             for g in p["groups"]:
                 mx = g.get("max_selections")
@@ -327,8 +403,7 @@ class OrderingCapability(Capability):
                        else f"{'required' if g.get('required') else 'optional'}, up to {mx} included free" if mx else "optional, any number")
                 opts = ", ".join(f"{m['name']} (+{fmt_money(m['price_minor'], cur)})" if m["price_minor"] else m["name"] for m in g["modifiers"])
                 lines.append(f"    {g['name']} [{req}]: {opts}")
-        cart = await self.find_cart(turn.contact["id"])
-        its = await self.items(cart["id"]) if cart else []
+        its = cart_items
         lines.append("\nCURRENT CART:")
         lines += [f"#{i} {it['quantity']}x {it['product_name']}" + (f" ({', '.join(m['name'] for m in it['modifiers'])})" if it["modifiers"] else "") for i, it in enumerate(its, 1)] or ["(empty)"]
         cart = cart or {}
@@ -339,7 +414,9 @@ class OrderingCapability(Capability):
                      "(3) Before checkout you must know PICKUP or DELIVERY; delivery needs an address; payment covers food only — for delivery, a person confirms the fee AFTER payment. "
                      "(4) Propose checkout only after fulfilment is set and the customer clearly confirmed they're done. (5) Never state totals; the system shows them. "
                      "(6) Items marked [digital] are sent to the customer in this chat automatically the moment payment is confirmed: never ask pickup or "
-                     "delivery for a cart of only digital items, never promise a link before payment, and never make one up.")
+                     "delivery for a cart of only digital items, never promise a link before payment, and never make one up."
+                     + (" (7) This is a big menu: never claim an item doesn't exist because it isn't listed above; ask for its name, or send a "
+                        "section with show_menu(category=...)." if len(catalog) > MENU_INLINE_MAX else ""))
         return "\n".join(lines)
 
     def check_reply(self, turn, reply: str, results: list) -> Optional[str]:

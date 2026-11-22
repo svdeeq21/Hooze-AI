@@ -12,7 +12,10 @@ export default function WhatsAppTab({ id, detail }: { id: string; detail: Tenant
   const [qrFor, setQrFor] = useState<Channel | null>(null);
   const [hookFor, setHookFor] = useState<Channel | null>(null);
   const [hookBase, setHookBase] = useState("");
-  const [form, setForm] = useState({ instance_name: "", base_url: "http://localhost:8080", api_key: "", create_instance: false, webhook_base_url: "http://host.docker.internal:8000" });
+  // Start from the Evolution server already in use. The old defaults (localhost:8080 / host.docker.internal) only work on a laptop:
+  // on the live server they made "Add number" fail instantly with a 502.
+  const knownEvolution = detail.channels.find((c) => c.base_url)?.base_url ?? "";
+  const [form, setForm] = useState({ instance_name: "", base_url: knownEvolution, api_key: "", create_instance: false, webhook_base_url: "" });
   const [result, setResult] = useState<{ url: string; ok: boolean; note: string | null } | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: ["tenant", id] });
 
@@ -52,9 +55,9 @@ export default function WhatsAppTab({ id, detail }: { id: string; detail: Tenant
       <Card title="Add a WhatsApp number">
         <form className="grid gap-4 md:grid-cols-2" onSubmit={(e) => { e.preventDefault(); provision.mutate(); }}>
           <Field label="Instance name" hint="Any short name, e.g. spudbox-main."><Input value={form.instance_name} onChange={(e) => setForm({ ...form, instance_name: e.target.value })} required minLength={2} /></Field>
-          <Field label="Evolution API address" hint="Where hooze-core reaches Evolution (from the machine running hooze-core)."><Input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} required /></Field>
-          <Field label="Evolution API key"><Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} required /></Field>
-          <Field label="How Evolution reaches hooze-core" hint="Docker on Windows: http://host.docker.internal:8000 · same compose stack: http://hooze-core:8000 · live: your public https address."><Input value={form.webhook_base_url} onChange={(e) => setForm({ ...form, webhook_base_url: e.target.value })} /></Field>
+          <Field label="Evolution API address" hint="Your Evolution server's public address. Not localhost: that means the Hooze server itself."><Input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://your-evolution.onrender.com" required /></Field>
+          <Field label="Evolution API key" hint="The AUTHENTICATION_API_KEY set on your Evolution server."><Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} required /></Field>
+          <Field label="How Evolution reaches hooze-core" hint="Leave empty on the live server. Only for local testing: http://host.docker.internal:8000 (Docker on Windows) or http://hooze-core:8000 (same compose stack)."><Input value={form.webhook_base_url} onChange={(e) => setForm({ ...form, webhook_base_url: e.target.value })} placeholder="Empty = the server's PUBLIC_BASE_URL" /></Field>
           <div className="md:col-span-2"><Toggle checked={form.create_instance} onChange={(v) => setForm({ ...form, create_instance: v })} label="Create this instance on Evolution for me (leave off if it already exists)" /></div>
           <div className="md:col-span-2"><Button type="submit" variant="primary" busy={provision.isPending}>Add number</Button></div>
         </form>

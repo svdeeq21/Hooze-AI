@@ -59,6 +59,14 @@ def build_user_prompt(turn) -> str:
         parts.append(f"CONVERSATION SUMMARY (older messages):\n{turn.conversation['summary']}")
     hist = "\n".join(f"{'Customer' if m['sender_type'] == 'contact' else 'You'}: {history_line(m['content'])}" for m in turn.history if m.get("content"))
     parts.append("RECENT MESSAGES (oldest first):\n" + (hist or "(none)"))
+    trailing = 0
+    for m in reversed(turn.history):
+        if m.get("sender_type") != "contact":
+            break
+        trailing += 1
+    if trailing:
+        parts.append(f"NOTE: the customer sent {trailing + 1} messages in a row before you replied (the last {trailing} of RECENT MESSAGES, then the "
+                     "LATEST MESSAGE). Answer them together in ONE reply.")
     name = clean_name(turn.contact.get("display_name")) or "Customer"
     if getattr(turn, "greeting_sent", False):
         parts.append("NOTE: your welcome message has ALREADY been sent to this customer in this turn. Do not greet or welcome them again; respond only to what they said.")

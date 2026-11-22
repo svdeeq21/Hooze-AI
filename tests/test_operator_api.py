@@ -115,6 +115,47 @@ async def test_failed_instance_creation_is_a_502_and_creates_no_channel(re_world
     assert r.status_code == 502 and "name in use" in r.text and len(w.db.rows("channels")) == before
 
 
+async def test_unreachable_evolution_says_what_to_fix_instead_of_all_connection_attempts_failed(re_world, monkeypatch):
+    """The dashboard used to pre-fill http://localhost:8080. On Render that is the Hooze server itself: refused in ~10 ms, a bare 502."""
+    import httpx
+    w = re_world
+    async def refused(*a, **k): raise httpx.ConnectError("All connection attempts failed")
+    monkeypatch.setattr(operator_mod, "create_evolution_instance", refused)
+    async with client(container(w)) as c:
+        r = await c.post(f"/v1/platform/tenants/{w.tid}/channels/provision", headers=P, json={"instance_name": "shop2", "base_url": "http://localhost:8080", "api_key": "k", "create_instance": True})
+    assert r.status_code == 502 and "localhost" in r.json()["detail"] and "public address" in r.json()["detail"]
+    assert "EVOLUTION_CREATE_FAILED" in w.sink.names() and not any(ch["instance_name"] == "shop2" for ch in w.db.rows("channels"))
+
+
+async def test_wrong_key_and_taken_name_get_plain_answers(re_world, monkeypatch):
+    w = re_world
+    for err, expect in [("Evolution create 401: {\"error\":\"Unauthorized\"}", "API key"),
+                        ("Evolution create 403: {\"response\":{\"message\":[\"This name \\\"shop\\\" is already in use.\"]}}", "turn off 'Create this instance'")]:
+        async def refuse(*a, _e=err, **k): raise RuntimeError(_e)
+        monkeypatch.setattr(operator_mod, "create_evolution_instance", refuse)
+        async with client(container(w)) as c:
+            r = await c.post(f"/v1/platform/tenants/{w.tid}/channels/provision", headers=P, json={"instance_name": "shop", "base_url": "https://evo.example.com", "api_key": "k", "create_instance": True})
+        assert r.status_code == 502 and expect in r.json()["detail"]
+
+
+async def test_a_setup_that_can_never_receive_messages_is_refused_before_anything_is_created(re_world, monkeypatch):
+    w = re_world
+    created = []
+    async def fake_create(*a, **k): created.append(a)
+    monkeypatch.setattr(operator_mod, "create_evolution_instance", fake_create)
+    async with client(container(w)) as c:
+        # an Evolution server on the internet cannot call back to host.docker.internal (the old dashboard default)
+        bad_hook = await c.post(f"/v1/platform/tenants/{w.tid}/channels/provision", headers=P, json={
+            "instance_name": "shop3", "base_url": "https://evolution-api.onrender.com", "api_key": "k", "create_instance": True, "webhook_base_url": "http://host.docker.internal:8000"})
+        no_scheme = await c.post(f"/v1/platform/tenants/{w.tid}/channels/provision", headers=P, json={
+            "instance_name": "shop4", "base_url": "evolution-api.onrender.com", "api_key": "k", "create_instance": True})
+        local_docker = await c.post(f"/v1/platform/tenants/{w.tid}/channels/provision", headers=P, json={   # still fine for local testing
+            "instance_name": "shop5", "base_url": "http://evo:8080", "api_key": "k", "create_instance": True, "webhook_base_url": "http://host.docker.internal:8000"})
+    assert bad_hook.status_code == 400 and "cannot reach" in bad_hook.json()["detail"]
+    assert no_scheme.status_code == 400 and "https://" in no_scheme.json()["detail"]
+    assert local_docker.status_code == 200 and len(created) == 1
+
+
 async def test_reconnect_rotates_the_secret_but_a_failure_keeps_the_old_working_one(re_world):
     w = re_world
     old_hash = w.channel["secret_hash"]
